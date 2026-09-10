@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Document ready{% endblock %}
+{% block content %}
+<div class="card narrow done-card">
+  <div class="done-icon">
+    <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+  </div>
+  <h1>Document ready</h1>
+  <div class="summary-box">
+    <div class="summary-row"><span>Name</span><b>{{ record.name }}</b></div>
+    <div class="summary-row"><span>Department</span><b>{{ record.department }}</b></div>
+    <div class="summary-row"><span>Role</span><b>{{ record.role }}</b></div>
+    <div class="summary-row"><span>Date</span><b>{{ record.handover_date }}</b></div>
+  </div>
+  <a class="button full" href="{{ url_for('get_file', record_id=record.id) }}">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+    Download .docx
+  </a>
+  <p class="links">
+    <a href="{{ url_for('index') }}">+ Create another</a>
+    &nbsp;·&nbsp;
+    <a href="{{ url_for('history') }}">View history</a>
+  </p>
+</div>
+{% endblock %}
