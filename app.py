@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-STM Laptop Handover — web app
-==============================
-A small internal Flask site that fills the "محضر تسليم لاب توب" Word
-document from a web form instead of the command line, and keeps a
-searchable history of every document it has generated.
+STM Handover Documents — web app
+==================================
+A small internal Flask site that fills STM's handover/receipt Word
+documents from a web form instead of the command line, and keeps a
+searchable, deletable history of every document it has generated.
+
+Supports multiple document templates (laptop handover, laptop
+replacement, keyboard/mouse receipt, screen handover, ...) - see
+fill_logic.py's TEMPLATES registry, which is the single source of truth
+for what documents exist and what fields each one's form collects. Adding
+a new document type later means adding one entry there plus a .docx file
+in doc_templates/ - nothing in this file needs to change.
 
 Run locally:
     pip install -r requirements.txt
@@ -15,10 +22,10 @@ Run locally:
 See README.md for environment variables and deployment notes.
 """
 
+import json
 import os
 import re
 import secrets
-import uuid
 from datetime import datetime, date
 from functools import wraps
 from pathlib import Path
@@ -29,14 +36,14 @@ from flask import (
     session, send_from_directory, flash, abort,
 )
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import inspect, text
 
-from fill_logic import fill_document, REQUIRED_FIELDS
+from fill_logic import TEMPLATES, all_fields, required_field_keys, template_path
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")  # reads SECRET_KEY / TEAM_PASSWORD from .env if present
 GENERATED_DIR = BASE_DIR / "generated"
 INSTANCE_DIR = BASE_DIR / "instance"
-TEMPLATE_PATH = BASE_DIR / "Template.docx"
 GENERATED_DIR.mkdir(exist_ok=True)
 INSTANCE_DIR.mkdir(exist_ok=True)
 
@@ -63,24 +70,55 @@ db = SQLAlchemy(app)
 
 class Handover(db.Model):
     id = db.Column(db.Integer, primary_key=True)
+    template_id = db.Column(db.String(60), nullable=False, default="laptop_handover")
     name = db.Column(db.String(200), nullable=False)
     department = db.Column(db.String(120))
     role = db.Column(db.String(120))
-    mobile = db.Column(db.String(40))
-    email = db.Column(db.String(200))
-    code = db.Column(db.String(40))
     govid = db.Column(db.String(40))
-    serial = db.Column(db.String(80))
-    model = db.Column(db.String(80))
-    cpu = db.Column(db.String(40))
     handover_date = db.Column(db.String(20))
+    # Every field the form collected for this document (mobile, email,
+    # code, and whatever device-specific fields that template has) -
+    # kept as JSON since different templates collect very different
+    # fields. name/department/role/govid above are duplicated out as
+    # real columns just so the history list can show and search them
+    # without needing to parse JSON for every row.
+    fields_json = db.Column(db.Text)
     filename = db.Column(db.String(300), nullable=False)
     created_by = db.Column(db.String(120))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+    @property
+    def fields(self):
+        try:
+            return json.loads(self.fields_json) if self.fields_json else {}
+        except (TypeError, ValueError):
+            return {}
+
+    @property
+    def template_label(self):
+        spec = TEMPLATES.get(self.template_id)
+        return spec["label"] if spec else self.template_id
+
 
 with app.app_context():
     db.create_all()
+
+    # Lightweight migration: add any columns older databases don't have
+    # yet, without touching (or losing) existing rows. SQLite's ALTER
+    # TABLE only supports adding columns, which is all we need here.
+    inspector = inspect(db.engine)
+    if "handover" in inspector.get_table_names():
+        existing_cols = {c["name"] for c in inspector.get_columns("handover")}
+        with db.engine.begin() as conn:
+            if "template_id" not in existing_cols:
+                conn.execute(text(
+                    "ALTER TABLE handover ADD COLUMN template_id VARCHAR(60) "
+                    "DEFAULT 'laptop_handover'"
+                ))
+            if "fields_json" not in existing_cols:
+                conn.execute(text("ALTER TABLE handover ADD COLUMN fields_json TEXT"))
+            if "govid" not in existing_cols:
+                conn.execute(text("ALTER TABLE handover ADD COLUMN govid VARCHAR(40)"))
 
 
 @app.template_filter("mask_id")
@@ -135,35 +173,78 @@ def logout():
 
 
 # ----------------------------------------------------------------------
-# Main form
+# Template picker (home page)
+# ----------------------------------------------------------------------
+
+@app.route("/")
+@login_required
+def index():
+    return render_template("picker.html", templates=TEMPLATES)
+
+
+# ----------------------------------------------------------------------
+# Document form (one per template)
 # ----------------------------------------------------------------------
 
 FILENAME_UNSAFE_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
-def display_filename(name):
+def display_filename(template_id, name):
     """The clean, human-facing filename a person sees when they download -
-    always "استلام لابتوب(Name).docx", no timestamps or ids in it."""
+    e.g. "استلام لابتوب(Name).docx" - no timestamps or ids in it."""
+    spec = TEMPLATES.get(template_id, {})
+    prefix = spec.get("filename_prefix", "مستند")
     safe_name = FILENAME_UNSAFE_RE.sub("", name).strip() or "employee"
-    return f"استلام لابتوب({safe_name}).docx"
+    return f"{prefix}({safe_name}).docx"
 
 
-@app.route("/", methods=["GET", "POST"])
+def generated_filename(template_id, name, date_obj):
+    """The filename a generated document is actually saved under in
+    generated/ - e.g. "Yasmin Mohamed - Laptop Handover - 2026-09-10.docx" -
+    so the folder is browsable on its own, not just through the site.
+    Still collision-safe: if that exact name already exists (same person,
+    same document type, same day), a " (2)", " (3)", ... counter is
+    appended rather than overwriting an earlier document."""
+    spec = TEMPLATES.get(template_id, {})
+    label = spec.get("label", template_id)
+    safe_name = FILENAME_UNSAFE_RE.sub("", name).strip() or "employee"
+    safe_label = FILENAME_UNSAFE_RE.sub("", label).strip() or template_id
+    date_str = date_obj.strftime("%Y-%m-%d")
+    base = f"{safe_name} - {safe_label} - {date_str}"
+    candidate = f"{base}.docx"
+    n = 2
+    while (GENERATED_DIR / candidate).exists():
+        candidate = f"{base} ({n}).docx"
+        n += 1
+    return candidate
+
+
+@app.route("/new/<template_id>", methods=["GET", "POST"])
 @login_required
-def index():
-    if request.method == "POST":
-        values = {k: request.form.get(k, "").strip() for k in REQUIRED_FIELDS}
+def new_document(template_id):
+    spec = TEMPLATES.get(template_id)
+    if spec is None:
+        abort(404)
 
-        missing = [k for k in REQUIRED_FIELDS if not values[k]]
+    if request.method == "POST":
+        field_keys = [f["key"] for f in all_fields(template_id)]
+        values = {k: request.form.get(k, "").strip() for k in field_keys}
+
+        missing = [k for k in required_field_keys(template_id) if not values[k]]
         if missing:
             flash("Please fill in all required fields: " + ", ".join(missing))
-            return render_template("form.html", data=request.form, today=date.today().isoformat())
+            return render_template(
+                "form.html", spec=spec, template_id=template_id,
+                data=request.form, today=date.today().isoformat(),
+            )
 
-        # Always force the @stm.com.eg domain - only the part before an "@"
-        # (if the person typed one) is kept, so it's impossible to end up
-        # with any other domain.
-        email_local = values["email"].split("@")[0].strip()
-        values["email"] = f"{email_local}@stm.com.eg"
+        # Email field (only some templates have one): always force the
+        # @stm.com.eg domain - only the part before an "@" (if the person
+        # typed one) is kept, so it's impossible to end up with any other
+        # domain.
+        if "email" in values:
+            email_local = values["email"].split("@")[0].strip()
+            values["email"] = f"{email_local}@stm.com.eg"
 
         date_input = request.form.get("date", "").strip()
         if date_input:
@@ -171,37 +252,42 @@ def index():
                 date_obj = datetime.strptime(date_input, "%Y-%m-%d")
             except ValueError:
                 flash("Invalid date")
-                return render_template("form.html", data=request.form, today=date.today().isoformat())
+                return render_template(
+                    "form.html", spec=spec, template_id=template_id,
+                    data=request.form, today=date.today().isoformat(),
+                )
         else:
             date_obj = datetime.today()
 
         fill_data = dict(values)
         fill_data["date_obj"] = date_obj
-        fill_data["color"] = request.form.get("color", "").strip() or "BLACK"
-        fill_data["storage"] = request.form.get("storage", "").strip() or "512SSD"
-        fill_data["ram"] = request.form.get("ram", "").strip() or "24GB"
-        fill_data["company"] = request.form.get("company", "").strip() or "اس تي ام للاستثمار"
+        for extra in spec.get("extra_fields", []):
+            fill_data[extra["key"]] = request.form.get(extra["key"], "").strip() or extra.get("default", "")
 
-        # Stored on disk under an internal, collision-proof name (so two
-        # people named the same thing - or the same person generated
-        # twice - never overwrite each other's file or corrupt an older
-        # history entry). The name a person actually sees when they
-        # download is computed separately in display_filename(), with no
-        # id or timestamp in it.
-        internal_name = f"{uuid.uuid4().hex}.docx"
+        doc_path = template_path(template_id)
+        if not doc_path.exists():
+            flash(f"{spec['doc_file']} is missing on the server.")
+            return render_template(
+                "form.html", spec=spec, template_id=template_id,
+                data=request.form, today=date.today().isoformat(),
+            )
+
+        # Stored on disk under a human-readable, collision-safe name (see
+        # generated_filename()) so the generated/ folder is browsable on
+        # its own - e.g. "Yasmin Mohamed - Laptop Handover - 2026-09-10.docx".
+        # The name a person sees when they download from the site is
+        # computed separately in display_filename() and can differ (it
+        # follows STM's Arabic document-naming convention).
+        internal_name = generated_filename(template_id, values["name"], date_obj)
         output_path = GENERATED_DIR / internal_name
-
-        if not TEMPLATE_PATH.exists():
-            flash("Template.docx is missing on the server.")
-            return render_template("form.html", data=request.form, today=date.today().isoformat())
-
-        fill_document(TEMPLATE_PATH, output_path, fill_data)
+        spec["fill"](doc_path, output_path, fill_data)
 
         record = Handover(
+            template_id=template_id,
             name=values["name"], department=values["department"], role=values["role"],
-            mobile=values["mobile"], email=values["email"], code=values["code"],
-            govid=values["govid"], serial=values["serial"], model=values["model"], cpu=values["cpu"],
+            govid=values.get("govid", ""),
             handover_date=f"{date_obj.day}/{date_obj.month}/{date_obj.year}",
+            fields_json=json.dumps(fill_data, default=str),
             filename=internal_name,
             created_by=session.get("display_name", "-"),
         )
@@ -210,7 +296,10 @@ def index():
 
         return redirect(url_for("done", record_id=record.id))
 
-    return render_template("form.html", data={}, today=date.today().isoformat())
+    return render_template(
+        "form.html", spec=spec, template_id=template_id,
+        data={}, today=date.today().isoformat(),
+    )
 
 
 @app.route("/done/<int:record_id>")
@@ -229,9 +318,13 @@ def get_file(record_id):
         abort(404)
     return send_from_directory(
         GENERATED_DIR, record.filename,
-        as_attachment=True, download_name=display_filename(record.name),
+        as_attachment=True, download_name=display_filename(record.template_id, record.name),
     )
 
+
+# ----------------------------------------------------------------------
+# History (search + permanent delete)
+# ----------------------------------------------------------------------
 
 @app.route("/history")
 @login_required
@@ -249,6 +342,21 @@ def history():
         )
     records = query.limit(300).all()
     return render_template("history.html", records=records, q=q)
+
+
+@app.route("/delete/<int:record_id>", methods=["POST"])
+@login_required
+def delete_history(record_id):
+    record = Handover.query.get_or_404(record_id)
+    file_path = GENERATED_DIR / record.filename
+    if file_path.exists():
+        file_path.unlink()
+    name = record.name
+    db.session.delete(record)
+    db.session.commit()
+    flash(f"Deleted the record for {name}.")
+    q = request.form.get("q", "")
+    return redirect(url_for("history", q=q) if q else url_for("history"))
 
 
 if __name__ == "__main__":

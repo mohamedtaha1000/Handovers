@@ -9,7 +9,7 @@
 <div class="card wide">
   <form method="get" class="search">
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
-    <input type="text" name="q" value="{{ q }}" placeholder="Search name / department / role">
+    <input type="text" name="q" value="{{ q }}" placeholder="Search name / department / position">
     <button type="submit">Search</button>
   </form>
 
@@ -19,8 +19,9 @@
       <thead>
         <tr>
           <th>Name</th>
+          <th>Type</th>
           <th>Dept</th>
-          <th>Role</th>
+          <th>Position</th>
           <th>National ID</th>
           <th>Date</th>
           <th>By</th>
@@ -31,6 +32,7 @@
         {% for r in records %}
         <tr>
           <td class="strong">{{ r.name }}</td>
+          <td class="muted">{{ r.template_label }}</td>
           <td>{{ r.department }}</td>
           <td>{{ r.role }}</td>
           <td class="mono">{{ r.govid|mask_id }}</td>
@@ -41,6 +43,13 @@
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
               Download
             </a>
+            <form method="post" action="{{ url_for('delete_history', record_id=r.id) }}" class="delete-form" onsubmit="return confirm('Permanently delete the record for {{ r.name }}? This also deletes the generated .docx file. This cannot be undone.');">
+              <input type="hidden" name="q" value="{{ q }}">
+              <button type="submit" class="delete-link">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6h16Z"/></svg>
+                Delete
+              </button>
+            </form>
           </td>
         </tr>
         {% endfor %}
