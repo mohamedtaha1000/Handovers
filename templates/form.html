@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}New handover{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>New laptop handover</h1>
+  <p class="lead">Fills the official document automatically</p>
+</div>
+
+<form method="post" id="handover-form">
+  <div class="card section">
+    <div class="section-title">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>
+      <h2>Employee details</h2>
+    </div>
+    <div class="grid">
+      <div class="field">
+        <label>Full name <b>*</b></label>
+        <input name="name" required value="{{ data.get('name','') }}" placeholder="e.g. Ahmed Ali Mohamed">
+      </div>
+      <div class="field">
+        <label>Department <b>*</b></label>
+        <input name="department" required value="{{ data.get('department','') }}" placeholder="IT, Finance, Sales…">
+      </div>
+      <div class="field">
+        <label>Role <b>*</b></label>
+        <input name="role" required value="{{ data.get('role','') }}" placeholder="Software Engineer">
+      </div>
+      <div class="field">
+        <label>Mobile <b>*</b></label>
+        <input name="mobile" required value="{{ data.get('mobile','') }}" inputmode="numeric" placeholder="01xxxxxxxxx">
+      </div>
+      <div class="field">
+        <label>Email <b>*</b></label>
+        <div class="input-group">
+          <input name="email" required value="{{ data.get('email','') }}" placeholder="username">
+          <span class="suffix">@stm.com.eg</span>
+        </div>
+      </div>
+      <div class="field">
+        <label>Employee code <b>*</b></label>
+        <input name="code" required value="{{ data.get('code','') }}">
+      </div>
+      <div class="field span-2">
+        <label>National ID <b>*</b></label>
+        <input name="govid" required value="{{ data.get('govid','') }}" maxlength="14" inputmode="numeric" placeholder="14 digits">
+      </div>
+    </div>
+  </div>
+
+  <div class="card section">
+    <div class="section-title">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg>
+      <h2>Laptop details</h2>
+    </div>
+    <div class="grid">
+      <div class="field">
+        <label>Laptop model <b>*</b></label>
+        <input name="model" required value="{{ data.get('model','') }}" placeholder="E14">
+      </div>
+      <div class="field">
+        <label>Serial number <b>*</b></label>
+        <input name="serial" required value="{{ data.get('serial','') }}" placeholder="PF5K...">
+      </div>
+      <div class="field">
+        <label>CPU <b>*</b></label>
+        <input name="cpu" required value="{{ data.get('cpu','') }}" placeholder="I5 / I7">
+      </div>
+      <div class="field">
+        <label>Date</label>
+        <input type="date" name="date" value="{{ data.get('date', today) }}">
+      </div>
+    </div>
+
+    <details>
+      <summary>
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+        Optional extras
+      </summary>
+      <div class="grid">
+        <div class="field">
+          <label>Color</label>
+          <input name="color" value="{{ data.get('color','') }}" placeholder="BLACK">
+        </div>
+        <div class="field">
+          <label>Storage</label>
+          <input name="storage" value="{{ data.get('storage','') }}" placeholder="512SSD">
+        </div>
+        <div class="field">
+          <label>RAM</label>
+          <input name="ram" value="{{ data.get('ram','') }}" placeholder="24GB">
+        </div>
+        <div class="field">
+          <label>Company</label>
+          <input name="company" value="{{ data.get('company','') }}" placeholder="STM Investment">
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" id="submit-btn">
+      <span class="btn-label">Generate document</span>
+      <span class="btn-spinner" hidden></span>
+    </button>
+  </div>
+</form>
+
+<script>
+  document.getElementById('handover-form').addEventListener('submit', function () {
+    var btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    btn.classList.add('loading');
+    btn.querySelector('.btn-label').textContent = 'Generating…';
+  });
+</script>
+{% endblock %}

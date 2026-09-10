@@ -1,3 +1,11 @@
+<<<<<<< HEAD
+__pycache__/
+*.pyc
+.env
+instance/
+generated/*.docx
+!generated/.gitkeep
+=======
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -216,3 +224,4 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+>>>>>>> origin/main

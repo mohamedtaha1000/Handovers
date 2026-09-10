@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}History{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Handover history</h1>
+  <p class="lead">Every document generated from this site</p>
+</div>
+
+<div class="card wide">
+  <form method="get" class="search">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+    <input type="text" name="q" value="{{ q }}" placeholder="Search name / department / role">
+    <button type="submit">Search</button>
+  </form>
+
+  {% if records %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Dept</th>
+          <th>Role</th>
+          <th>National ID</th>
+          <th>Date</th>
+          <th>By</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in records %}
+        <tr>
+          <td class="strong">{{ r.name }}</td>
+          <td>{{ r.department }}</td>
+          <td>{{ r.role }}</td>
+          <td class="mono">{{ r.govid|mask_id }}</td>
+          <td>{{ r.handover_date }}</td>
+          <td class="muted">{{ r.created_by }}</td>
+          <td class="actions">
+            <a class="download-link" href="{{ url_for('get_file', record_id=r.id) }}">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+              Download
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+    <p>{% if q %}No matching results{% else %}No documents yet{% endif %}</p>
+    {% if not q %}<a href="{{ url_for('index') }}" class="button">+ Create the first one</a>{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
