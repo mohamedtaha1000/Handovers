@@ -9,7 +9,7 @@
   <div class="summary-box">
     <div class="summary-row"><span>Name</span><b>{{ record.name }}</b></div>
     <div class="summary-row"><span>Department</span><b>{{ record.department }}</b></div>
-    <div class="summary-row"><span>Role</span><b>{{ record.role }}</b></div>
+    <div class="summary-row"><span>Position</span><b>{{ record.role }}</b></div>
     <div class="summary-row"><span>Date</span><b>{{ record.handover_date }}</b></div>
   </div>
   <a class="button full" href="{{ url_for('get_file', record_id=record.id) }}">

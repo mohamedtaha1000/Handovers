@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Laptop Handover{% endblock %} · STM</title>
+  <title>{% block title %}Handover Documents{% endblock %} · STM</title>
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='stm-logo.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
@@ -12,7 +12,7 @@
     <div class="topbar-inner">
       <a class="brand" href="{{ url_for('index') if session.get('logged_in') else url_for('login') }}">
         <img src="{{ url_for('static', filename='stm-logo.png') }}" alt="STM" class="brand-logo">
-        <span class="brand-text">Laptop Handover</span>
+        <span class="brand-text">Handover Documents</span>
       </a>
       {% if session.get('logged_in') %}
       <nav>

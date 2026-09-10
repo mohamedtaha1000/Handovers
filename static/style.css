@@ -358,6 +358,25 @@ td.muted { color: var(--muted); }
 }
 .download-link:hover { background: var(--accent-light); }
 
+.actions { display: flex; justify-content: flex-end; align-items: center; gap: 2px; }
+.delete-form { display: inline-flex; margin: 0; }
+.delete-link {
+  background: none;
+  color: var(--error-text);
+  border: none;
+  padding: 5px 10px;
+  margin: 0;
+  font-size: .87rem;
+  font-weight: 400;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .15s;
+}
+.delete-link:hover { background: var(--error-bg); }
+
 .empty-state {
   text-align: center;
   padding: 50px 20px;
@@ -366,6 +385,51 @@ td.muted { color: var(--muted); }
 .empty-state svg { opacity: .5; margin-bottom: 12px; }
 .empty-state p { margin: 0 0 18px; font-size: .92rem; }
 .empty-state .button { display: inline-flex; }
+
+/* ---------- Template picker ---------- */
+
+.back-link { margin: 0 0 6px; font-size: .85rem; }
+.back-link a { color: var(--muted); text-decoration: none; }
+.back-link a:hover { color: var(--accent); text-decoration: underline; }
+
+.picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+@media (max-width: 620px) {
+  .picker-grid { grid-template-columns: 1fr; }
+}
+.picker-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  text-decoration: none;
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(20, 23, 43, .04);
+  transition: border-color .15s, box-shadow .15s, transform .1s;
+}
+.picker-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 4px 14px rgba(58, 109, 240, .12);
+  transform: translateY(-1px);
+}
+.picker-icon {
+  flex: none;
+  width: 42px; height: 42px;
+  border-radius: 10px;
+  background: var(--accent-light);
+  color: var(--accent-dark);
+  display: flex; align-items: center; justify-content: center;
+}
+.picker-text { flex: 1; min-width: 0; }
+.picker-label { font-weight: 600; font-size: .98rem; }
+.picker-label-ar { color: var(--muted); font-size: .85rem; margin-top: 2px; }
+.picker-arrow { flex: none; color: var(--muted); }
 
 /* ---------- Footer ---------- */
 
