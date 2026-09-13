@@ -86,6 +86,11 @@ class Handover(db.Model):
     filename = db.Column(db.String(300), nullable=False)
     created_by = db.Column(db.String(120))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Set only once a record has actually been corrected, so "never
+    # edited" stays distinguishable from "edited by the same person who
+    # created it, straight away".
+    updated_by = db.Column(db.String(120))
+    updated_at = db.Column(db.DateTime)
 
     @property
     def fields(self):
@@ -119,6 +124,10 @@ with app.app_context():
                 conn.execute(text("ALTER TABLE handover ADD COLUMN fields_json TEXT"))
             if "govid" not in existing_cols:
                 conn.execute(text("ALTER TABLE handover ADD COLUMN govid VARCHAR(40)"))
+            if "updated_by" not in existing_cols:
+                conn.execute(text("ALTER TABLE handover ADD COLUMN updated_by VARCHAR(120)"))
+            if "updated_at" not in existing_cols:
+                conn.execute(text("ALTER TABLE handover ADD COLUMN updated_at DATETIME"))
 
 
 @app.template_filter("mask_id")
@@ -198,7 +207,7 @@ def display_filename(template_id, name):
     return f"{prefix}({safe_name}).docx"
 
 
-def generated_filename(template_id, name, date_obj):
+def generated_filename(template_id, name, date_obj, exclude=None):
     """The filename a generated document is actually saved under in
     generated/ - e.g. "Yasmin Mohamed - Laptop Handover - 2026-09-10.docx" -
     so the folder is browsable on its own, not just through the site.
@@ -213,11 +222,140 @@ def generated_filename(template_id, name, date_obj):
     base = f"{safe_name} - {safe_label} - {date_str}"
     candidate = f"{base}.docx"
     n = 2
-    while (GENERATED_DIR / candidate).exists():
+    # `exclude` is the record's own current file when re-generating after
+    # an edit: without it, correcting a typo that doesn't change the name
+    # or the date would see the record's existing file, decide the name
+    # was taken, and save the correction as " (2)" beside the original.
+    while (GENERATED_DIR / candidate).exists() and candidate != exclude:
         candidate = f"{base} ({n}).docx"
         n += 1
     return candidate
 
+
+# ----------------------------------------------------------------------
+# Shared form handling
+#
+# Creating a document and correcting one are the same job apart from what
+# happens at the end, so both routes go through the helpers below rather
+# than each carrying their own copy of the rules. That matters more than
+# it saves typing: a validation rule or a normalisation that lived in
+# only one of the two would mean a value the form rejects on the way in
+# could still be edited back in afterwards.
+# ----------------------------------------------------------------------
+
+def collect_values(template_id, form):
+    """Read this template's fields out of a submitted form, validate them,
+    and return (values, fill_data, date_obj, errors). `errors` empty means
+    the submission is good."""
+    spec = TEMPLATES[template_id]
+    fields = all_fields(template_id)
+    values = {f["key"]: form.get(f["key"], "").strip() for f in fields}
+    errors = []
+
+    missing = [k for k in required_field_keys(template_id) if not values[k]]
+    if missing:
+        errors.append("Please fill in all required fields: " + ", ".join(missing))
+
+    # Format checks (mobile number, national ID, ...) - only fields whose
+    # spec declares a "pattern" get checked; a value that's merely
+    # non-empty but the wrong shape (too short, letters where there should
+    # be digits, ...) is caught here rather than ending up wrong inside
+    # the generated document.
+    for f in fields:
+        pattern = f.get("pattern")
+        if not pattern or not values.get(f["key"]):
+            continue
+        if not re.fullmatch(pattern, values[f["key"]]):
+            errors.append(f.get("pattern_msg") or f"{f['label']} is not the right format.")
+
+    # Email field (only some templates have one): always force the
+    # @stm.com.eg domain - only the part before an "@" (if the person
+    # typed one) is kept, so it's impossible to end up with any other
+    # domain.
+    if "email" in values and values["email"]:
+        values["email"] = values["email"].split("@")[0].strip() + "@stm.com.eg"
+
+    date_input = form.get("date", "").strip()
+    date_obj = datetime.today()
+    if date_input:
+        try:
+            date_obj = datetime.strptime(date_input, "%Y-%m-%d")
+        except ValueError:
+            errors.append("Invalid date")
+
+    fill_data = dict(values)
+    fill_data["date_obj"] = date_obj
+    for extra in spec.get("extra_fields", []):
+        fill_data[extra["key"]] = form.get(extra["key"], "").strip() or extra.get("default", "")
+
+    return values, fill_data, date_obj, errors
+
+
+def render_form(template_id, data, record=None):
+    spec = TEMPLATES[template_id]
+    return render_template(
+        "form.html", spec=spec, template_id=template_id,
+        data=data, today=date.today().isoformat(), record=record,
+    )
+
+
+def write_document(template_id, fill_data, internal_name):
+    """Generate the .docx into generated/ under `internal_name`.
+
+    Written to a temporary file first and moved into place only once it
+    has been produced in full, so a re-generation that fails part way
+    through can't leave a half-written document where a good one was."""
+    spec = TEMPLATES[template_id]
+    doc_path = template_path(template_id)
+    if not doc_path.exists():
+        return f"{spec['doc_file']} is missing on the server."
+    tmp_path = GENERATED_DIR / f".tmp-{secrets.token_hex(8)}.docx"
+    try:
+        spec["fill"](doc_path, tmp_path, fill_data)
+        os.replace(tmp_path, GENERATED_DIR / internal_name)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    return None
+
+
+def form_data_from_record(record):
+    """Turn a saved record back into the dict form.html pre-fills from."""
+    data = dict(record.fields)
+
+    # The date is stored as a "YYYY-MM-DD HH:MM:SS" string (fields_json
+    # serialises the datetime), but <input type="date"> needs the bare
+    # date, so hand it one it will actually display.
+    raw = str(data.pop("date_obj", "") or "")
+    stamp = ""
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            stamp = datetime.strptime(raw[:19] if " " in raw else raw, fmt).strftime("%Y-%m-%d")
+            break
+        except ValueError:
+            continue
+    if not stamp and record.handover_date:
+        try:
+            day, month, year = record.handover_date.split("/")
+            stamp = f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+        except (ValueError, AttributeError):
+            stamp = ""
+    data["date"] = stamp or date.today().isoformat()
+
+    # A field rendered with a suffix (the "@stm.com.eg" on the email box)
+    # only ever shows the part before it, so strip the suffix back off -
+    # otherwise editing would round-trip to "name@stm.com.eg@stm.com.eg".
+    for f in all_fields(record.template_id):
+        suffix = f.get("suffix")
+        value = data.get(f["key"], "")
+        if suffix and isinstance(value, str) and value.endswith(suffix):
+            data[f["key"]] = value[: -len(suffix)]
+    return data
+
+
+# ----------------------------------------------------------------------
+# Create a document
+# ----------------------------------------------------------------------
 
 @app.route("/new/<template_id>", methods=["GET", "POST"])
 @login_required
@@ -227,71 +365,11 @@ def new_document(template_id):
         abort(404)
 
     if request.method == "POST":
-        fields = all_fields(template_id)
-        field_keys = [f["key"] for f in fields]
-        values = {k: request.form.get(k, "").strip() for k in field_keys}
-
-        missing = [k for k in required_field_keys(template_id) if not values[k]]
-        if missing:
-            flash("Please fill in all required fields: " + ", ".join(missing))
-            return render_template(
-                "form.html", spec=spec, template_id=template_id,
-                data=request.form, today=date.today().isoformat(),
-            )
-
-        # Format checks (mobile number, national ID, ...) - only fields
-        # whose spec declares a "pattern" get checked; a value that's
-        # merely non-empty but the wrong shape (too short, letters where
-        # there should be digits, ...) is caught here rather than ending
-        # up wrong inside the generated document.
-        format_errors = []
-        for f in fields:
-            pattern = f.get("pattern")
-            if not pattern or not values.get(f["key"]):
-                continue
-            if not re.fullmatch(pattern, values[f["key"]]):
-                format_errors.append(f.get("pattern_msg") or f"{f['label']} is not the right format.")
-        if format_errors:
-            for msg in format_errors:
-                flash(msg)
-            return render_template(
-                "form.html", spec=spec, template_id=template_id,
-                data=request.form, today=date.today().isoformat(),
-            )
-
-        # Email field (only some templates have one): always force the
-        # @stm.com.eg domain - only the part before an "@" (if the person
-        # typed one) is kept, so it's impossible to end up with any other
-        # domain.
-        if "email" in values:
-            email_local = values["email"].split("@")[0].strip()
-            values["email"] = f"{email_local}@stm.com.eg"
-
-        date_input = request.form.get("date", "").strip()
-        if date_input:
-            try:
-                date_obj = datetime.strptime(date_input, "%Y-%m-%d")
-            except ValueError:
-                flash("Invalid date")
-                return render_template(
-                    "form.html", spec=spec, template_id=template_id,
-                    data=request.form, today=date.today().isoformat(),
-                )
-        else:
-            date_obj = datetime.today()
-
-        fill_data = dict(values)
-        fill_data["date_obj"] = date_obj
-        for extra in spec.get("extra_fields", []):
-            fill_data[extra["key"]] = request.form.get(extra["key"], "").strip() or extra.get("default", "")
-
-        doc_path = template_path(template_id)
-        if not doc_path.exists():
-            flash(f"{spec['doc_file']} is missing on the server.")
-            return render_template(
-                "form.html", spec=spec, template_id=template_id,
-                data=request.form, today=date.today().isoformat(),
-            )
+        values, fill_data, date_obj, errors = collect_values(template_id, request.form)
+        if errors:
+            for message in errors:
+                flash(message)
+            return render_form(template_id, request.form)
 
         # Stored on disk under a human-readable, collision-safe name (see
         # generated_filename()) so the generated/ folder is browsable on
@@ -300,8 +378,10 @@ def new_document(template_id):
         # computed separately in display_filename() and can differ (it
         # follows STM's Arabic document-naming convention).
         internal_name = generated_filename(template_id, values["name"], date_obj)
-        output_path = GENERATED_DIR / internal_name
-        spec["fill"](doc_path, output_path, fill_data)
+        problem = write_document(template_id, fill_data, internal_name)
+        if problem:
+            flash(problem)
+            return render_form(template_id, request.form)
 
         record = Handover(
             template_id=template_id,
@@ -317,10 +397,63 @@ def new_document(template_id):
 
         return redirect(url_for("done", record_id=record.id))
 
-    return render_template(
-        "form.html", spec=spec, template_id=template_id,
-        data={}, today=date.today().isoformat(),
-    )
+    return render_form(template_id, {})
+
+
+# ----------------------------------------------------------------------
+# Correct a document that has already been generated
+#
+# Re-generates the .docx in place rather than adding a second one: a
+# correction is the same handover, not a new one, so the record keeps a
+# single current document and the history keeps a single row. The old
+# file is removed when the correction changes the employee name or the
+# date, since those are what the filename is built from.
+# ----------------------------------------------------------------------
+
+@app.route("/edit/<int:record_id>", methods=["GET", "POST"])
+@login_required
+def edit_document(record_id):
+    record = Handover.query.get_or_404(record_id)
+    template_id = record.template_id
+    if template_id not in TEMPLATES:
+        flash("That document was made from a template this site no longer has.")
+        return redirect(url_for("history"))
+
+    if request.method == "POST":
+        values, fill_data, date_obj, errors = collect_values(template_id, request.form)
+        if errors:
+            for message in errors:
+                flash(message)
+            return render_form(template_id, request.form, record=record)
+
+        previous_name = record.filename
+        internal_name = generated_filename(
+            template_id, values["name"], date_obj, exclude=previous_name)
+        problem = write_document(template_id, fill_data, internal_name)
+        if problem:
+            flash(problem)
+            return render_form(template_id, request.form, record=record)
+
+        if previous_name != internal_name:
+            old_file = GENERATED_DIR / previous_name
+            if old_file.exists():
+                old_file.unlink()
+
+        record.name = values["name"]
+        record.department = values["department"]
+        record.role = values["role"]
+        record.govid = values.get("govid", "")
+        record.handover_date = f"{date_obj.day}/{date_obj.month}/{date_obj.year}"
+        record.fields_json = json.dumps(fill_data, default=str)
+        record.filename = internal_name
+        record.updated_by = session.get("display_name", "-")
+        record.updated_at = datetime.utcnow()
+        db.session.commit()
+
+        flash(f"Updated the document for {record.name}.")
+        return redirect(url_for("done", record_id=record.id))
+
+    return render_form(template_id, form_data_from_record(record), record=record)
 
 
 @app.route("/done/<int:record_id>")
@@ -453,7 +586,8 @@ def export_history():
     ws.title = "Handover history"
 
     headers = ["Name", "Document type", "Department", "Position", "National ID",
-               "Handover date", "Generated by", "Generated at"]
+               "Handover date", "Generated by", "Generated at",
+               "Last edited by", "Last edited at"]
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)
@@ -466,10 +600,12 @@ def export_history():
             r.name, r.template_label, r.department, r.role, mask_id(r.govid),
             r.handover_date, r.created_by,
             r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "",
+            r.updated_by or "",
+            r.updated_at.strftime("%Y-%m-%d %H:%M") if r.updated_at else "",
         ])
 
     # Reasonable column widths rather than Excel's cramped default.
-    widths = [22, 26, 18, 20, 16, 14, 16, 18]
+    widths = [22, 26, 18, 20, 16, 14, 16, 18, 16, 18]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[chr(64 + i)].width = w
 
