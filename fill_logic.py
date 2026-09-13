@@ -1442,13 +1442,14 @@ _MOBILE = {
     "key": "mobile", "label": "Mobile", "placeholder": "01xxxxxxxxx", "required": True,
     "inputmode": "numeric", "maxlength": 11,
     "pattern": r"01[0125][0-9]{8}",
+    "hint": "11 digits",
     "pattern_msg": "Enter an 11-digit Egyptian mobile number starting with 010, 011, 012, or 015 (e.g. 01012345678).",
 }
 _EMAIL = {"key": "email", "label": "Email", "required": True, "suffix": "@stm.com.eg"}
 _CODE = {"key": "code", "label": "Employee code", "required": True}
 _GOVID = {
     "key": "govid", "label": "National ID", "required": True, "maxlength": 14,
-    "inputmode": "numeric", "placeholder": "14 digits", "wide": True,
+    "inputmode": "numeric", "placeholder": "", "wide": True, "hint": "14 digits",
     "pattern": r"[0-9]{14}",
     "pattern_msg": "National ID must be exactly 14 digits.",
 }
@@ -1460,6 +1461,9 @@ TEMPLATES = {
     "laptop_handover": {
         "label": "Laptop handover",
         "label_ar": "محضر تسليم لاب توب",
+        "group": "Computers",
+        "category": "computer",
+        "short": "Laptop",
         "doc_file": "laptop_handover.docx",
         "filename_prefix": "استلام لابتوب",
         "fill": fill_laptop_handover,
@@ -1480,6 +1484,9 @@ TEMPLATES = {
     "laptop_replacement": {
         "label": "Laptop replacement",
         "label_ar": "محضر استبدال جهاز كمبيوتر",
+        "group": "Computers",
+        "category": "computer",
+        "short": "Replacement",
         "doc_file": "laptop_replacement.docx",
         "filename_prefix": "استبدال لابتوب",
         "fill": fill_laptop_replacement,
@@ -1509,6 +1516,9 @@ TEMPLATES = {
     "keyboard_mouse_handover": {
         "label": "Keyboard & mouse handover",
         "label_ar": "محضر تسليم كيبورد وماوس",
+        "group": "Peripherals",
+        "category": "peripheral",
+        "short": "Keyboard & mouse",
         "doc_file": "keyboard_mouse_handover.docx",
         "filename_prefix": "استلام كيبورد وماوس",
         "fill": fill_accessory_handover,
@@ -1527,6 +1537,9 @@ TEMPLATES = {
     "mouse_receipt": {
         "label": "Mouse handover",
         "label_ar": "محضر استلام ماوس",
+        "group": "Peripherals",
+        "category": "peripheral",
+        "short": "Mouse",
         "doc_file": "mouse_receipt.docx",
         "filename_prefix": "استلام ماوس",
         "fill": fill_accessory_handover,
@@ -1543,6 +1556,9 @@ TEMPLATES = {
     "screen_handover": {
         "label": "Screen handover",
         "label_ar": "محضر تسليم شاشة",
+        "group": "Peripherals",
+        "category": "peripheral",
+        "short": "Screen",
         "doc_file": "screen_handover.docx",
         "filename_prefix": "تسليم شاشة",
         "fill": fill_accessory_handover,
@@ -1560,6 +1576,9 @@ TEMPLATES = {
     "router_handover": {
         "label": "Router handover",
         "label_ar": "محضر تسليم راوتر بشريحة",
+        "group": "Storage & network",
+        "category": "network",
+        "short": "Router",
         "doc_file": "router_handover.docx",
         "filename_prefix": "استلام راوتر",
         "fill": fill_accessory_handover,
@@ -1579,6 +1598,9 @@ TEMPLATES = {
     "headset_handover": {
         "label": "Headset handover",
         "label_ar": "محضر تسليم سماعة",
+        "group": "Peripherals",
+        "category": "peripheral",
+        "short": "Headset",
         "doc_file": "headset_handover.docx",
         "filename_prefix": "استلام سماعة",
         "fill": fill_accessory_handover,
@@ -1596,6 +1618,9 @@ TEMPLATES = {
     "printer_handover": {
         "label": "Printer handover",
         "label_ar": "محضر تسليم طابعة",
+        "group": "Peripherals",
+        "category": "peripheral",
+        "short": "Printer",
         "doc_file": "printer_handover.docx",
         "filename_prefix": "استلام طابعة",
         "fill": fill_accessory_handover,
@@ -1614,6 +1639,9 @@ TEMPLATES = {
     "flash_handover": {
         "label": "Flash drive handover",
         "label_ar": "محضر تسليم فلاشة",
+        "group": "Storage & network",
+        "category": "storage",
+        "short": "Flash drive",
         "doc_file": "flash_handover.docx",
         "filename_prefix": "استلام فلاشة",
         "fill": fill_accessory_handover,
@@ -1632,6 +1660,9 @@ TEMPLATES = {
     "hard_handover": {
         "label": "Hard disk handover",
         "label_ar": "محضر تسليم هارد",
+        "group": "Storage & network",
+        "category": "storage",
+        "short": "Hard disk",
         "doc_file": "hard_handover.docx",
         "filename_prefix": "استلام هارد",
         "fill": fill_accessory_handover,
@@ -1648,6 +1679,18 @@ TEMPLATES = {
         ],
     },
 }
+
+
+# The picker shows the ten documents in these groups, in this order, and
+# the history table tints each document's chip by its category. Purely
+# presentational - the fill functions never read them - but they live
+# beside the labels so there is one place to describe a document type.
+TEMPLATE_GROUPS = ("Computers", "Peripherals", "Storage & network")
+
+# What a new joiner is usually handed on their first morning. The picker
+# offers this as one shortcut rather than making someone tick four boxes.
+STARTER_SET = ("laptop_handover", "mouse_receipt",
+               "keyboard_mouse_handover", "headset_handover")
 
 
 def all_fields(template_id):

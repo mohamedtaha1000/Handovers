@@ -2,16 +2,27 @@
   One field, rendered the same way everywhere. `prefix` namespaces the
   input name for the combined form, where several documents each want
   their own "model" and "serial".
+
+  Required is the rule here, not the exception, so nothing is starred -
+  the few optional fields say so instead, and a format rule short enough
+  to fit sits beside the label rather than as a permanent grey line under
+  the box. The full rule still reaches the browser as the title, and the
+  server repeats it in the message box when a value is actually wrong.
 #}
 {% macro field(f, data, prefix='') %}
 {% set key = prefix ~ f.key %}
 <div class="field{{ ' span-2' if f.wide else '' }}">
-  <label for="{{ key }}">{{ f.label }}{% if f.required %} <b>*</b>{% endif %}</label>
+  <label for="{{ key }}">
+    {{ f.label }}
+    {% if not f.required %}<span class="field-optional">optional</span>
+    {% elif f.hint %}<span class="field-note">{{ f.hint }}</span>{% endif %}
+  </label>
   {% if f.suffix %}
   <div class="input-group">
     <input id="{{ key }}" name="{{ key }}" {% if f.required %}required{% endif %}
            value="{{ data.get(key, data.get(f.key, '')) }}" placeholder="username"
-           {% if f.key == 'code' or f.key == 'name' %}autocomplete="off"{% endif %}>
+           {% if f.key in ('name', 'code') %}data-employee-lookup{% endif %}
+           autocomplete="off">
     <span class="suffix">{{ f.suffix }}</span>
   </div>
   {% else %}
@@ -22,9 +33,40 @@
          {% if f.pattern %}pattern="{{ f.pattern }}" title="{{ f.pattern_msg or '' }}"{% endif %}
          {% if f.key in ('name', 'code') %}data-employee-lookup autocomplete="off"{% endif %}
          placeholder="{{ f.placeholder or '' }}">
-  {% if f.pattern_msg %}<p class="field-hint">{{ f.pattern_msg }}</p>{% endif %}
   {% endif %}
 </div>
+{% endmacro %}
+
+{# The heading of a numbered section. #}
+{% macro section_head(n, title, aside='') %}
+<div class="section-title">
+  <span class="section-number">{{ n }}</span>
+  <h2>{{ title }}</h2>
+  {% if aside %}<span class="section-hint">{{ aside }}</span>{% endif %}
+</div>
+{% endmacro %}
+
+{# Defaults that print unless changed - visible rather than collapsed. #}
+{% macro standard_spec(spec, data, prefix='') %}
+{% if spec.extra_fields %}
+<div class="standard-spec">
+  <div class="standard-spec-head">
+    <b>Standard spec</b>
+    <span>printed as-is unless you change it</span>
+  </div>
+  <div class="spec-chips">
+    {% for f in spec.extra_fields %}
+    <label class="spec-chip">
+      <span>{{ f.label }}</span>
+      <input id="{{ prefix }}{{ f.key }}" name="{{ prefix }}{{ f.key }}"
+             value="{{ data.get(prefix ~ f.key, data.get(f.key, '')) or f.default or '' }}"
+             size="{{ (f.default or f.placeholder or '')|length + 2 }}"
+             aria-label="{{ f.label }}">
+    </label>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 {% endmacro %}
 
 {# The "already has one of these" notice, shown above the submit button. #}
@@ -32,7 +74,7 @@
 <div class="flash info dup-notice">
   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
   <div>
-    <b class="flash-title">{{ spec.label }} — this person already has one</b>
+    <b class="flash-title">{{ spec.label }} &mdash; this person already has one</b>
     <p>
       Generated {{ dup.handover_date }}{% if dup.created_by %} by {{ dup.created_by }}{% endif %}.
       <a href="{{ url_for('get_file', record_id=dup.id) }}">Download it</a> ·

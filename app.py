@@ -38,7 +38,10 @@ from flask import (
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import inspect, text
 
-from fill_logic import TEMPLATES, all_fields, required_field_keys, template_path
+from fill_logic import (
+    TEMPLATES, TEMPLATE_GROUPS, STARTER_SET,
+    all_fields, required_field_keys, template_path,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")  # reads SECRET_KEY / TEAM_PASSWORD from .env if present
@@ -130,6 +133,19 @@ with app.app_context():
                 conn.execute(text("ALTER TABLE handover ADD COLUMN updated_at DATETIME"))
 
 
+@app.template_filter("initials")
+def initials(value):
+    """One or two initials for the topbar badge. Takes the first letter
+    of the first and last word, which works for an Arabic name as well as
+    a Latin one."""
+    parts = [p for p in str(value or "").split() if p]
+    if not parts:
+        return "?"
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return (parts[0][0] + parts[-1][0]).upper()
+
+
 @app.template_filter("mask_id")
 def mask_id(value):
     """Show only the last 4 characters of a sensitive value (national ID)
@@ -191,8 +207,11 @@ def index():
     # ?employee=<record id> carries "another document for this person"
     # through the picker, so whichever type is chosen next opens with the
     # employee half already filled in.
-    return render_template("picker.html", templates=TEMPLATES,
-                           employee=request.args.get("employee", type=int))
+    return render_template(
+        "picker.html", templates=TEMPLATES, groups=grouped_templates(),
+        popular=most_used(), starter_set=",".join(STARTER_SET),
+        employee=request.args.get("employee", type=int),
+    )
 
 
 # ----------------------------------------------------------------------
@@ -234,6 +253,92 @@ def generated_filename(template_id, name, date_obj, exclude=None):
         candidate = f"{base} ({n}).docx"
         n += 1
     return candidate
+
+
+# ----------------------------------------------------------------------
+# What the screens need to know beyond the records themselves
+# ----------------------------------------------------------------------
+
+def grouped_templates():
+    """The ten document types arranged for the picker, in group order."""
+    groups = []
+    for name in TEMPLATE_GROUPS:
+        members = [(tid, spec) for tid, spec in TEMPLATES.items()
+                   if spec.get("group") == name]
+        if members:
+            groups.append((name, members))
+    # A type whose group was mistyped still has to appear somewhere.
+    loose = [(tid, spec) for tid, spec in TEMPLATES.items()
+             if spec.get("group") not in TEMPLATE_GROUPS]
+    if loose:
+        groups.append(("Other", loose))
+    return groups
+
+
+def most_used(limit=3):
+    """The document types generated most often, so the handful that make
+    up most of the work are one click away instead of somewhere in a list
+    of ten. Falls back to the registry's own order on a fresh install,
+    where there is nothing to count yet."""
+    counted = (db.session.query(Handover.template_id, db.func.count(Handover.id))
+               .group_by(Handover.template_id)
+               .order_by(db.func.count(Handover.id).desc())
+               .limit(limit + 4).all())
+    ranked = [tid for tid, _ in counted if tid in TEMPLATES][:limit]
+    for tid in TEMPLATES:
+        if len(ranked) >= limit:
+            break
+        if tid not in ranked:
+            ranked.append(tid)
+    return [(tid, TEMPLATES[tid]) for tid in ranked]
+
+
+# The fields worth showing in the history table's equipment column, in
+# the order we would rather have them: what the thing is, then which one.
+EQUIPMENT_KEYS = ("model", "new_model", "brand", "capacity", "old_model")
+SERIAL_KEYS = ("serial", "new_serial", "sim_number", "old_serial")
+
+
+def equipment_summary(record):
+    """A one-line "what was handed over" for a history row: the model (or
+    brand, or capacity) and the serial, drawn from whichever fields that
+    document type happens to collect."""
+    fields = record.fields
+    def first(keys):
+        for key in keys:
+            value = (fields.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+    what = first(EQUIPMENT_KEYS)
+    brand = (fields.get("brand") or "").strip()
+    if brand and what and brand != what:
+        what = f"{brand} {what}"
+    return {"what": what, "serial": first(SERIAL_KEYS)}
+
+
+def active_filters(q, type_filter, date_from, date_to):
+    """The filters currently narrowing the history, each as a label plus
+    the query string that removes just that one - so they can be read back
+    in words and cleared individually."""
+    current = {"q": q, "type": type_filter, "from": date_from, "to": date_to}
+    chips = []
+    def add(key, label):
+        remaining = {k: v for k, v in current.items() if v and k != key}
+        chips.append({"label": label, "remove": url_for("history", **remaining)})
+    if q:
+        add("q", f'"{q}"')
+    if type_filter and type_filter in TEMPLATES:
+        add("type", TEMPLATES[type_filter]["label"])
+    if date_from and date_to:
+        chips.append({"label": f"{date_from} to {date_to}",
+                      "remove": url_for("history", **{k: v for k, v in current.items()
+                                                      if v and k not in ("from", "to")})})
+    elif date_from:
+        add("from", f"from {date_from}")
+    elif date_to:
+        add("to", f"until {date_to}")
+    return chips
 
 
 # ----------------------------------------------------------------------
@@ -823,6 +928,13 @@ def history():
         "history.html", records=records, q=q, type_filter=type_filter,
         date_from=date_from, date_to=date_to, templates=TEMPLATES,
         page=page, pages=pages, total=total, page_size=HISTORY_PAGE_SIZE,
+        equipment={r.id: equipment_summary(r) for r in records},
+        filters=active_filters(q, type_filter, date_from, date_to),
+        matching=total,
+        # `total` is what the current filters match; the heading wants the
+        # size of the whole log, or it reads as though filtering deleted
+        # everything else.
+        grand_total=Handover.query.count(),
     )
 
 
