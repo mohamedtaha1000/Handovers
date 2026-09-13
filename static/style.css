@@ -11,7 +11,14 @@
   --muted: #767c92;
   --error-bg: #fdeceb;
   --error-text: #9c2b1f;
+  --error-border: #f3c8c3;
   --success: #23a26d;
+  --success-bg: #e8f7f0;
+  --success-text: #156c47;
+  --success-border: #b5e3cd;
+  --info-bg: #eef3fc;
+  --info-text: #2c4b86;
+  --info-border: #ccdcf5;
   --radius: 12px;
 }
 
@@ -278,10 +285,12 @@ button.loading .btn-spinner { display: inline-block !important; }
   gap: 8px;
 }
 
+/* A message's colour is its meaning: red only when something needs
+   fixing, green when the thing you asked for worked, blue for anything
+   merely worth knowing. Previously every message was red, so a saved
+   edit was indistinguishable from a rejected one. */
 .flash {
-  background: var(--error-bg);
-  color: var(--error-text);
-  border: 1px solid #f3c8c3;
+  border: 1px solid transparent;
   border-radius: 10px;
   padding: 12px 16px;
   margin-bottom: 20px;
@@ -290,8 +299,24 @@ button.loading .btn-spinner { display: inline-block !important; }
   align-items: flex-start;
   gap: 10px;
 }
+.flash.error {
+  background: var(--error-bg);
+  color: var(--error-text);
+  border-color: var(--error-border);
+}
+.flash.success {
+  background: var(--success-bg);
+  color: var(--success-text);
+  border-color: var(--success-border);
+}
+.flash.info {
+  background: var(--info-bg);
+  color: var(--info-text);
+  border-color: var(--info-border);
+}
 .flash svg { flex: none; margin-top: 1px; }
 .flash p { margin: 2px 0; }
+.flash-title { display: block; margin-bottom: 3px; }
 
 /* ---------- Done page ---------- */
 

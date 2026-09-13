@@ -368,7 +368,7 @@ def new_document(template_id):
         values, fill_data, date_obj, errors = collect_values(template_id, request.form)
         if errors:
             for message in errors:
-                flash(message)
+                flash(message, "error")
             return render_form(template_id, request.form)
 
         # Stored on disk under a human-readable, collision-safe name (see
@@ -380,7 +380,7 @@ def new_document(template_id):
         internal_name = generated_filename(template_id, values["name"], date_obj)
         problem = write_document(template_id, fill_data, internal_name)
         if problem:
-            flash(problem)
+            flash(problem, "error")
             return render_form(template_id, request.form)
 
         record = Handover(
@@ -416,14 +416,14 @@ def edit_document(record_id):
     record = Handover.query.get_or_404(record_id)
     template_id = record.template_id
     if template_id not in TEMPLATES:
-        flash("That document was made from a template this site no longer has.")
+        flash("That document was made from a template this site no longer has.", "error")
         return redirect(url_for("history"))
 
     if request.method == "POST":
         values, fill_data, date_obj, errors = collect_values(template_id, request.form)
         if errors:
             for message in errors:
-                flash(message)
+                flash(message, "error")
             return render_form(template_id, request.form, record=record)
 
         previous_name = record.filename
@@ -431,7 +431,7 @@ def edit_document(record_id):
             template_id, values["name"], date_obj, exclude=previous_name)
         problem = write_document(template_id, fill_data, internal_name)
         if problem:
-            flash(problem)
+            flash(problem, "error")
             return render_form(template_id, request.form, record=record)
 
         if previous_name != internal_name:
@@ -450,7 +450,7 @@ def edit_document(record_id):
         record.updated_at = datetime.utcnow()
         db.session.commit()
 
-        flash(f"Updated the document for {record.name}.")
+        flash(f"Saved. The document for {record.name} has been generated again.", "success")
         return redirect(url_for("done", record_id=record.id))
 
     return render_form(template_id, form_data_from_record(record), record=record)
@@ -631,7 +631,7 @@ def delete_history(record_id):
     name = record.name
     db.session.delete(record)
     db.session.commit()
-    flash(f"Deleted the record for {name}.")
+    flash(f"Deleted the record for {name}, and its generated file.", "success")
     # Preserve whatever search/filter/page the delete was performed from,
     # so deleting a row from page 3 of a filtered view doesn't bounce the
     # person back to an unfiltered page 1.

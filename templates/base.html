@@ -34,12 +34,37 @@
     </div>
   </header>
   <main class="container">
-    {% with messages = get_flashed_messages() %}
-      {% if messages %}
-        <div class="flash no-print">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
-          <div>{% for m in messages %}<p>{{ m }}</p>{% endfor %}</div>
-        </div>
+    {#
+      Messages are grouped by kind and each kind gets its own colour and
+      icon. They all used to render in one red box with a warning icon,
+      so "Saved." looked exactly like "National ID must be 14 digits" and
+      a successful edit read as a failure.
+      Anything flashed without a recognised category falls back to the
+      neutral "info" style rather than to red.
+    #}
+    {% with raw = get_flashed_messages(with_categories=true) %}
+      {% if raw %}
+        {% set groups = {'success': [], 'error': [], 'info': []} %}
+        {% for category, message in raw %}
+          {% set _ = groups.get(category, groups['info']).append(message) %}
+        {% endfor %}
+        {% for kind in ['error', 'success', 'info'] %}
+          {% if groups[kind] %}
+          <div class="flash {{ kind }} no-print" role="{{ 'alert' if kind == 'error' else 'status' }}">
+            {% if kind == 'success' %}
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/></svg>
+            {% elif kind == 'error' %}
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+            {% else %}
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+            {% endif %}
+            <div>
+              {% if kind == 'error' %}<b class="flash-title">{{ 'Please fix the following' if groups[kind]|length > 1 else 'Could not save' }}</b>{% endif %}
+              {% for m in groups[kind] %}<p>{{ m }}</p>{% endfor %}
+            </div>
+          </div>
+          {% endif %}
+        {% endfor %}
       {% endif %}
     {% endwith %}
     {% block content %}{% endblock %}
