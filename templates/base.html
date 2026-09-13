@@ -24,9 +24,12 @@
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
           History
         </a>
+        <span class="nav-rule"></span>
         <span class="who">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>
-          {{ session.get('display_name') }}
+          {# Initials rather than a generic silhouette: on a shared-login
+             tool, whose name is on the documents you generate matters. #}
+          <span class="who-badge">{{ session.get('display_name', '?')|initials }}</span>
+          <span class="who-name">{{ session.get('display_name') }}</span>
         </span>
         <a href="{{ url_for('logout') }}" class="logout">Logout</a>
       </nav>

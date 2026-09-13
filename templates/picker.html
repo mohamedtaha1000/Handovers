@@ -2,7 +2,7 @@
 {% block title %}New document{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1>New handover document</h1>
+  <h1>What are you handing over?</h1>
   {% if employee %}
   <p class="lead">Another document for the same person &mdash; their details will be filled in for you</p>
   {% else %}
@@ -11,36 +11,76 @@
 </div>
 
 {#
-  Each card is a link, as it always was, so the common case stays a
-  single click. The checkbox beside it is the opt-in to the combined
-  form; the action bar only appears once something is ticked, so the
-  page is no busier than before for anyone who ignores it.
+  Each card is still a link, so the common case stays a single click. The
+  checkbox beside it opts into the combined form; the action bar only
+  appears once something is ticked.
 #}
 <form method="post" action="{{ url_for('new_batch_start', employee=employee) }}" id="picker-form">
-  <div class="picker-grid">
-    {% for tid, spec in templates.items() %}
-    <div class="picker-card" data-card>
-      <label class="picker-tick" title="Add {{ spec.label }} to a combined set">
-        <input type="checkbox" name="template_id" value="{{ tid }}">
-      </label>
-      <a class="picker-main" href="{{ url_for('new_document', template_id=tid, employee=employee) }}">
-        <div class="picker-icon">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
-        </div>
-        <div class="picker-text">
-          <div class="picker-label">{{ spec.label }}</div>
-          <div class="picker-label-ar">{{ spec.label_ar }}</div>
-        </div>
-        <svg class="picker-arrow" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
-      </a>
-    </div>
-    {% endfor %}
-  </div>
 
-  <div class="batch-bar" id="batch-bar" hidden>
-    <span class="batch-count"><b id="batch-n">0</b> selected</span>
-    <span class="batch-hint">You'll fill the employee details once</span>
-    <button type="submit">Continue</button>
+  {% if not employee %}
+  <a class="starter-card" href="{{ url_for('new_batch', types=starter_set) }}">
+    <span class="starter-icon">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
+    </span>
+    <span class="starter-text">
+      <b>New joiner starting today?</b>
+      <span>Laptop, mouse, keyboard and headset in one go &mdash; their details entered once</span>
+    </span>
+    <span class="starter-go">Start a set</span>
+  </a>
+  {% endif %}
+
+  {% if popular %}
+  <div class="picker-section">
+    <div class="picker-group-label">You use these most</div>
+    <div class="popular-grid">
+      {% for tid, spec in popular %}
+      <a class="popular-card" href="{{ url_for('new_document', template_id=tid, employee=employee) }}">
+        <span class="popular-icon cat-{{ spec.category }}">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+        </span>
+        <span class="popular-text">
+          <b>{{ spec.label }}</b>
+          <span>{{ spec.label_ar }}</span>
+        </span>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% for group_name, members in groups %}
+  <div class="picker-section">
+    <div class="picker-group-label">{{ group_name }}</div>
+    <div class="picker-grid">
+      {% for tid, spec in members %}
+      <div class="picker-card" data-card>
+        <label class="picker-tick" title="Add {{ spec.label }} to a combined set">
+          <input type="checkbox" name="template_id" value="{{ tid }}">
+        </label>
+        <a class="picker-main" href="{{ url_for('new_document', template_id=tid, employee=employee) }}">
+          <span class="picker-text">
+            <span class="picker-label">{{ spec.label }}</span>
+            <span class="picker-label-ar">{{ spec.label_ar }}</span>
+          </span>
+          <svg class="picker-arrow" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+        </a>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="action-bar" id="batch-bar" hidden>
+    <div class="action-bar-text">
+      <b><span id="batch-n">0</span> documents selected</b>
+      <span id="batch-names">You'll fill the employee details once</span>
+    </div>
+    <button type="button" class="button-secondary" id="batch-clear">Clear</button>
+    <button type="submit">
+      Continue
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </button>
   </div>
 </form>
 
@@ -49,15 +89,28 @@
     var form = document.getElementById('picker-form');
     var bar = document.getElementById('batch-bar');
     var count = document.getElementById('batch-n');
+    var names = document.getElementById('batch-names');
     function refresh() {
-      var ticked = form.querySelectorAll('input[name="template_id"]:checked');
+      var ticked = Array.prototype.slice.call(
+        form.querySelectorAll('input[name="template_id"]:checked'));
       count.textContent = ticked.length;
       bar.hidden = ticked.length === 0;
+      names.textContent = ticked.length
+        ? ticked.map(function (el) {
+            return el.closest('[data-card]').querySelector('.picker-label').textContent.trim();
+          }).join(', ') + " — employee details entered once"
+        : '';
       form.querySelectorAll('[data-card]').forEach(function (card) {
         card.classList.toggle('picked', card.querySelector('input').checked);
       });
     }
     form.addEventListener('change', refresh);
+    document.getElementById('batch-clear').addEventListener('click', function () {
+      form.querySelectorAll('input[name="template_id"]').forEach(function (el) {
+        el.checked = false;
+      });
+      refresh();
+    });
     refresh();
   })();
 </script>

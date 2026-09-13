@@ -1,10 +1,11 @@
 /*
  * "Reuse a previous employee" suggestions.
  *
- * Attached to the full-name and employee-code boxes rather than sitting
- * in a separate widget, so nobody has to learn it is there: typing a
- * name you have used before simply offers it back, and typing a new one
- * behaves exactly as it always did.
+ * Attached both to a labelled search box at the top of the employee
+ * section and to the full-name and employee-code fields themselves, so
+ * it is findable without being in the way: the box says what it does,
+ * and typing a name you have used before in the ordinary field offers it
+ * back anyway. Typing a new name behaves exactly as it always did.
  *
  * Only the employee half of the form is ever filled in. Equipment
  * details are deliberately left alone - the serial number of the laptop
@@ -47,9 +48,14 @@
       /* Let any validation styling re-evaluate against the new value. */
       field.dispatchEvent(new Event('input', { bubbles: true }));
     });
+    var search = document.getElementById('employee-search');
+    if (search) search.value = person.name || '';
     close();
-    var firstDevice = document.querySelector('.card.section:nth-of-type(2) input');
+    /* Straight on to the equipment, which is the only part left to fill. */
+    var form = document.getElementById('handover-form');
+    var firstDevice = form && form.querySelector('.card.section + .card.section input');
     if (firstDevice) firstDevice.focus();
+    if (form) form.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
   function render(input, matches) {
@@ -72,7 +78,7 @@
       item.addEventListener('mousedown', function (e) { e.preventDefault(); apply(person); });
       box.appendChild(item);
     });
-    input.parentNode.appendChild(box);
+    (input.closest('.field, .lookup-field') || input.parentNode).appendChild(box);
     active = input;
   }
 
