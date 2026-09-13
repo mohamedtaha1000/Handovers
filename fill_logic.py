@@ -22,6 +22,8 @@ import re
 from pathlib import Path
 
 import docx
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Emu
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
@@ -1046,23 +1048,125 @@ def trim_blank_lines(cell):
                 node.getparent().remove(node)
 
 
-def level_spec_rows(doc):
-    """Put every value in a device-spec row on one font size and family.
+# Every placeholder that names a property of the device being handed
+# over, as opposed to the employee receiving it. Used to recognise the
+# device-spec table in a document without having to know which columns
+# that particular document happens to have.
+DEVICE_TOKENS = (
+    "FILL_MODEL", "FILL_SERIAL", "FILL_BRAND", "FILL_COLOR", "FILL_CAPACITY",
+    "FILL_SIM_NUMBER", "FILL_STORAGE", "FILL_HARD", "FILL_RAM", "FILL_CPU",
+    "FILL_OLD_MODEL", "FILL_OLD_SERIAL", "FILL_OLD_COLOR", "FILL_OLD_STORAGE",
+    "FILL_OLD_HARD", "FILL_OLD_RAM", "FILL_OLD_CPU",
+    "FILL_NEW_MODEL", "FILL_NEW_SERIAL", "FILL_NEW_COLOR", "FILL_NEW_STORAGE",
+    "FILL_NEW_HARD", "FILL_NEW_RAM", "FILL_NEW_CPU",
+)
 
-    The serial-number cell in the laptop templates carries a font size a
-    couple of points larger than the five cells beside it - an editing
-    leftover, not a decision - which makes the serial sit visibly higher
-    and bigger than the model, colour, hard, RAM and CPU next to it. Each
-    cell gets one vote for the size it is already using and the majority
-    wins, so this corrects the odd one out without inventing a size the
-    document never had."""
+
+def find_spec_tables(doc):
+    """The device-spec tables, recognised by the device placeholders they
+    carry rather than by their column headings.
+
+    Must be called BEFORE filling, while the tokens are still there. The
+    earlier version looked for a table with both "Serial" and "CPU"
+    headings, which quietly skipped the documents that have neither - the
+    mouse receipt only has Model and Brand, so its row never got levelled
+    and the model printed bold beside a non-bold brand."""
+    return [table for table in doc.tables
+            if len(table.rows) >= 2
+            and any(token in "\n".join(c.text for row in table.rows for c in row.cells)
+                    for token in DEVICE_TOKENS)]
+
+
+def drop_empty_columns(table):
+    """Remove a spec table's filler columns.
+
+    These tables were drawn with six columns whatever the device needs,
+    so a hard disk's four real columns sit beside two empty ones. The
+    empty columns still claim their width, which squeezes the real ones -
+    a 14-digit SIM number was wrapping onto a second line inside a column
+    narrower than the blank one next to it. A column is only removed when
+    both its heading and its value are blank, so nothing that carries
+    content is ever dropped."""
+    grid = table._tbl.find(qn("w:tblGrid"))
+    if grid is None or len(table.rows) < 2:
+        return
+    columns = grid.findall(qn("w:gridCol"))
+    blank = [i for i in range(len(columns))
+             if i < len(table.rows[0].cells) and i < len(table.rows[1].cells)
+             and not table.rows[0].cells[i].text.strip()
+             and not table.rows[1].cells[i].text.strip()]
+    if not blank or len(blank) == len(columns):
+        return
+    # A merged cell spans columns, so removing one would corrupt the row.
+    # Note a <w:gridSpan> of 1 is not a merge - these templates carry them
+    # on ordinary cells, and treating their mere presence as a merge made
+    # this bail out on every table it was meant to fix.
+    for row in table.rows:
+        for cell in row.cells:
+            tcPr = cell._tc.find(qn("w:tcPr"))
+            if tcPr is None:
+                continue
+            span = tcPr.find(qn("w:gridSpan"))
+            if span is not None and int(span.get(qn("w:val")) or 1) > 1:
+                return
+    spare = sum(int(columns[i].get(qn("w:w")) or 0) for i in blank)
+    keep = [i for i in range(len(columns)) if i not in blank]
+    kept_total = sum(int(columns[i].get(qn("w:w")) or 0) for i in keep) or 1
+    for i in keep:
+        width = int(columns[i].get(qn("w:w")) or 0)
+        columns[i].set(qn("w:w"), str(width + round(spare * width / kept_total)))
+    for i in reversed(blank):
+        grid.remove(columns[i])
+        for row in table.rows:
+            cells = row.cells
+            if i < len(cells):
+                cells[i]._tc.getparent().remove(cells[i]._tc)
+    # The per-cell widths have to agree with the new grid.
+    widths = [int(c.get(qn("w:w")) or 0) for c in grid.findall(qn("w:gridCol"))]
+    for row in table.rows:
+        for cell, width in zip(row.cells, widths):
+            tcPr = cell._tc.find(qn("w:tcPr"))
+            if tcPr is None:
+                continue
+            tcW = tcPr.find(qn("w:tcW"))
+            if tcW is not None:
+                tcW.set(qn("w:w"), str(width))
+
+
+def fit_to_page(doc, tables):
+    """Shrink any of these tables that is declared wider than the page.
+
+    Nearly every device-spec table in these documents claims more column
+    width than the page has (one asked for 16425 twips of columns on a
+    10656-twip page). Word and LibreOffice deal with that by overlapping
+    or clipping whichever columns don't fit, which is how a header ended
+    up printed on top of its neighbour and a Color value fell off the
+    right edge entirely. Scaling the columns down proportionally keeps
+    the intended relative widths and puts every column back on the page.
+
+    Tables that already fit are left completely alone."""
+    section = doc.sections[0]
+    usable = Emu(section.page_width - section.left_margin - section.right_margin).twips
+    for table in tables:
+        grid = table._tbl.find(qn("w:tblGrid"))
+        if grid is None:
+            continue
+        columns = grid.findall(qn("w:gridCol"))
+        total = sum(int(c.get(qn("w:w")) or 0) for c in columns)
+        if total > usable:
+            fix_table_width(table, usable)
+
+
+def level_spec_rows(tables):
+    """Put every value in a device-spec row on one font size and family,
+    and drop the bold a few of them carry and their neighbours don't.
+
+    Each cell gets one vote for the size it is already using and the
+    majority wins, so this corrects the odd one out without inventing a
+    size the document never had. A tie goes to the smaller size, which
+    can only ever help a value fit its column."""
     from collections import Counter
-    for table in doc.tables:
-        if len(table.rows) < 2:
-            continue
-        header = " ".join(c.text.strip().lower() for c in table.rows[0].cells)
-        if "serial" not in header or "cpu" not in header:
-            continue
+    for table in tables:
         sizes, fonts, runs = Counter(), Counter(), []
         for cell in table.rows[1].cells:
             cell_sizes, cell_fonts = set(), set()
@@ -1086,13 +1190,36 @@ def level_spec_rows(doc):
                 sizes[value] += 1
             for value in cell_fonts:
                 fonts[value] += 1
-        size_val = sizes.most_common(1)[0][0] if sizes else None
-        font_names = fonts.most_common(1)[0][0] if fonts else None
+
+        def winner(counter, numeric=False):
+            if not counter:
+                return None
+            key = (lambda kv: (-kv[1], int(kv[0]))) if numeric else (lambda kv: -kv[1])
+            return sorted(counter.items(), key=key)[0][0]
+
+        size_val = winner(sizes, numeric=True)
+        font_names = winner(fonts)
         for run in runs:
             apply_format(run, size_val, font_names)
-        for cell in table.rows[1].cells:
+        for idx, cell in enumerate(table.rows[1].cells):
             align_top(cell)
             trim_blank_lines(cell)
+            # Centre every heading and every value, so each value sits
+            # under the column it belongs to. The templates had these
+            # cells on whatever alignment the author last dragged them
+            # to - some centred, some not, some simply inheriting - so
+            # "Logitech" printed off to the left of the "Brand" above it
+            # while "SN-77421" hugged the right of its own column.
+            for target in (table.rows[0].cells[idx], cell):
+                for paragraph in target.paragraphs:
+                    # The headings carry leftover hand-positioning
+                    # indents (one column's heading was pushed 2126
+                    # twips in, the next 3126) - centring a heading
+                    # inside an indent centres it in the wrong place,
+                    # which is why "Serial Number" floated right of the
+                    # value underneath it.
+                    clear_indent(paragraph)
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 
 def tidy_document(doc, mapping):
@@ -1151,9 +1278,13 @@ def fill_laptop_handover(template_path, output_path, data):
         "FILL_STORAGE": data.get("storage", ""),
         "FILL_RAM": data.get("ram", ""),
     }
+    specs = find_spec_tables(d)
     tidy_document(d, values)
     fill_placeholders(d, values)
-    level_spec_rows(d)
+    level_spec_rows(specs)
+    for spec in specs:
+        drop_empty_columns(spec)
+    fit_to_page(d, specs)
 
     specs = spec_table(d, "serial", "cpu")
     set_spec_cell(specs, "Color", data.get("color", ""))
@@ -1221,9 +1352,13 @@ def fill_laptop_replacement(template_path, output_path, data):
         "FILL_NEW_RAM": data["new_ram"],
         "FILL_NEW_CPU": data["new_cpu"],
     }
+    specs = find_spec_tables(d)
     tidy_document(d, values)
     fill_placeholders(d, values)
-    level_spec_rows(d)
+    level_spec_rows(specs)
+    for spec in specs:
+        drop_empty_columns(spec)
+    fit_to_page(d, specs)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     d.save(str(output_path))
@@ -1231,450 +1366,57 @@ def fill_laptop_replacement(template_path, output_path, data):
 
 
 # ----------------------------------------------------------------------
-# Mouse-only handover - same document family as keyboard & mouse below,
-# but not quite identical run layout underneath, so each gets its own
-# explicit fill function (safer than guessing a shared run index).
+# The eight accessory documents (mouse, keyboard & mouse, screen, router,
+# headset, printer, flash drive, hard disk)
+#
+# These were converted to the same placeholder form as the laptop
+# templates, and they all share one six-table skeleton - title, date
+# header, employee details, device spec, declaration, signatures. That
+# makes one fill function enough for all eight: every difference between
+# them (a router has a SIM number, a flash drive has a capacity, a mouse
+# has neither) is expressed by which placeholders that document contains,
+# so the mapping below can simply offer all of them and let each template
+# take the ones it has. Adding a ninth accessory document later needs a
+# registry entry and a .docx, and no new code at all.
 # ----------------------------------------------------------------------
 
-def fill_mouse_receipt(template_path, output_path, data):
-    """Mouse-only handover. Template refreshed 2026-09 (v2) - same
-    field set as before (Model/Brand), new source file."""
+def fill_accessory_handover(template_path, output_path, data):
+    """Fill any of the accessory handover documents."""
     d = docx.Document(str(template_path))
     date_str, day_name, month_name = date_parts(data["date_obj"])
 
-    name, department, role = data["name"], data["department"], data["role"]
-    mobile, code, govid = data["mobile"], data["code"], data["govid"]
-    company, model, brand = data["company"], data["model"], data["brand"]
-
-    t0, t1, t2, t3, t4, t5 = d.tables
-
-    set_date_cell(t1, date_str)
-    set_after_label(t1, 0, 1, month_name)
-    set_after_label(t1, 0, 2, day_name)
-
-    r = runs_of(t2, 0, 0); set_value(r[2], role)
-    append_value(t2.rows[0].cells[1].paragraphs[0], 1, " " + name)
-    r = runs_of(t2, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    r = runs_of(t2, 1, 1); set_value(r[3], department); match_size(r[3], r[0])
-    r = runs_of(t2, 2, 0); set_value(r[2], mobile)
-    r = runs_of(t2, 2, 1); set_value(r[1], code)
-
-    r = runs_of(t3, 1, 3); set_value(r[0], model)
-    r = runs_of(t3, 1, 4); set_value(r[0], brand); clear(r[1])
-
-    r = runs_of(t4, 0, 0); set_value(r[2], govid)
-    r = runs_of(t4, 0, 1); set_value(r[2], name)
-    r = runs_of(t4, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    r = runs_of(t4, 1, 1); set_value(r[3], department); match_size(r[3], r[0])
-
-    # 2026-09 (v4): every template now carries an "البريد الالكتروني/" row in
-    # the employee table and a date in the signature block.
-    set_email(t2, data.get("email", ""))
-    set_signature_dates(d, date_str)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    d.save(str(output_path))
-    return output_path
-
-
-# ----------------------------------------------------------------------
-# Keyboard & Mouse (combined) handover - a single combo kit (one
-# brand/model/serial/color covering both pieces), replacing the old
-# standalone keyboard-only document.
-# ----------------------------------------------------------------------
-
-def fill_keyboard_mouse_handover(template_path, output_path, data):
-    d = docx.Document(str(template_path))
-    date_str, day_name, month_name = date_parts(data["date_obj"])
-
-    name, department, role = data["name"], data["department"], data["role"]
-    mobile, code, govid = data["mobile"], data["code"], data["govid"]
-    company = data["company"]
-    brand, serial, model, color = data["brand"], data["serial"], data["model"], data["color"]
-
-    t0, t1, t2, t3, t4, t5 = d.tables
-
-    # The device table's declared column widths add up to well more
-    # than the page - without this, the last column (Color) renders
-    # right on top of the one before it and never actually shows.
-    fix_table_width(t3, 10500)
-    # Its header row also carries two stray duplicate runs (leftover
-    # from authoring) tacked onto the end of the Serial-Number and
-    # Model header cells, each echoing the NEXT column's own header
-    # ("...Model" and "...Color") - clear them for a clean header.
-    clear(t3.rows[0].cells[1].paragraphs[0].runs[-1])
-    clear(t3.rows[0].cells[2].paragraphs[0].runs[-1])
-
-    set_date_cell(t1, date_str)
-    set_after_label(t1, 0, 1, month_name)
-    set_after_label(t1, 0, 2, day_name)
-
-    append_value(t2.rows[0].cells[0].paragraphs[0], 1, role)
-    r = runs_of(t2, 0, 1); set_value(r[1], " " + name)
-    r = runs_of(t2, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    r = runs_of(t2, 1, 1); set_value(r[2], department)
-    r = runs_of(t2, 2, 0); set_value(r[1], mobile)
-    set_after_label(t2, 2, 1, code)
-
-    r = runs_of(t3, 1, 0); set_value(r[0], brand)
-    r = runs_of(t3, 1, 1); set_value(r[0], serial)
-    r = runs_of(t3, 1, 2); set_value(r[0], model)
-    for extra in r[1:]:
-        clear(extra)
-    r = runs_of(t3, 1, 5); set_value(r[0], color)
-
-    r = runs_of(t4, 0, 0); set_value(r[3], govid)
-    r = runs_of(t4, 0, 1); set_value(r[2], name)
-    r = runs_of(t4, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    r = runs_of(t4, 1, 1); set_value(r[3], department)
-
-    # 2026-09 (v4): every template now carries an "البريد الالكتروني/" row in
-    # the employee table and a date in the signature block.
-    set_email(t2, data.get("email", ""))
-    set_signature_dates(d, date_str)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    d.save(str(output_path))
-    return output_path
-
-
-# ----------------------------------------------------------------------
-# Router (SIM/data card) handover
-# ----------------------------------------------------------------------
-
-def fill_router_handover(template_path, output_path, data):
-    d = docx.Document(str(template_path))
-    date_str, day_name, month_name = date_parts(data["date_obj"])
-    name, department, role = data["name"], data["department"], data["role"]
-    mobile, code, govid = data["mobile"], data["code"], data["govid"]
-    company = data["company"]
-    brand, model, serial, sim_number, color = (
-        data["brand"], data["model"], data["serial"], data["sim_number"], data["color"]
-    )
-
-    t0, t1, t2, t3, t4, t5 = d.tables
-
-    # Device table columns overflow the page width (gridCol sums to
-    # 11744 twips vs ~10656 usable) - same defect already fixed in
-    # keyboard_mouse.docx - without this the last column(s) clip.
-    fix_table_width(t3, 10500)
-
-    # -- date line: "انه فى يوم/ [day] شهر/ [month] الموافق/ [date]" --
-    set_date_cell(t1, date_str)
-    set_after_label(t1, 0, 1, month_name)
-    set_after_label(t1, 0, 2, day_name)
-
-    # -- employee block --
-    # The role label's runs are in reversed order ('/ ' then the word
-    # itself, no trailing separator) so, unlike every other appended
-    # field in this document, the appended value needs its own
-    # leading space or it touches the label directly. The label word
-    # also carries a spelling typo in the source ("الوظيفىة") - fix it
-    # while we're in there.
-    r = runs_of(t2, 0, 0); set_value(r[1], "الوظيفة")
-    append_value(t2.rows[0].cells[0].paragraphs[0], 2, " " + role)
-    r = runs_of(t2, 0, 1); set_value(r[1], " " + name)
-    r = runs_of(t2, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    append_value(t2.rows[1].cells[1].paragraphs[0], 1, department)
-    r = runs_of(t2, 2, 0); set_value(r[1], " " + mobile)
-    set_after_label(t2, 2, 1, code)
-
-    # -- device table --
-    r = runs_of(t3, 1, 0); set_value(r[0], brand)
-    r = runs_of(t3, 1, 1); set_value(r[0], model)
-    r = runs_of(t3, 1, 2); set_value(r[0], serial)
-    r = runs_of(t3, 1, 3); set_value(r[0], sim_number)
-    r = runs_of(t3, 1, 4); set_value(r[0], color)
-
-    # -- declaration block --
-    r = runs_of(t4, 0, 0); set_value(r[3], govid)
-    append_value(t4.rows[0].cells[1].paragraphs[0], 1, " " + name)
-    r = runs_of(t4, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    r = runs_of(t4, 1, 1); set_value(r[2], " " + department)
-
-    # 2026-09 (v4): every template now carries an "البريد الالكتروني/" row in
-    # the employee table and a date in the signature block.
-    set_email(t2, data.get("email", ""))
-    set_signature_dates(d, date_str)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    d.save(str(output_path))
-    return output_path
-
-
-# ----------------------------------------------------------------------
-# Headset handover
-# ----------------------------------------------------------------------
-
-def fill_headset_handover(template_path, output_path, data):
-    d = docx.Document(str(template_path))
-    date_str, day_name, month_name = date_parts(data["date_obj"])
-    name, department, role = data["name"], data["department"], data["role"]
-    mobile, code, govid = data["mobile"], data["code"], data["govid"]
-    company = data["company"]
-    model, serial, color = data["model"], data["serial"], data["color"]
-
-    t0, t1, t2, t3, t4, t5 = d.tables
-
-    # -- date line --
-    set_date_cell(t1, date_str)
-    set_after_label(t1, 0, 1, month_name)
-    set_after_label(t1, 0, 2, day_name)
-
-    # -- employee block --
-    append_value(t2.rows[0].cells[0].paragraphs[0], 1, role)
-    r = runs_of(t2, 0, 1); set_value(r[1], " " + name)
-    r = runs_of(t2, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    append_value(t2.rows[1].cells[1].paragraphs[0], 1, department)
-    r = runs_of(t2, 2, 0); set_value(r[1], " " + mobile)
-    set_after_label(t2, 2, 1, code)
-
-    # -- device table --
-    # 6 raw grid columns collapse into 3 visible boxes (no border
-    # between each pair); Model/Serial's header sits in the first
-    # column of its pair while the pre-existing placeholder run sits
-    # in the second - values are written into the header's own column
-    # instead (matching every other table in this project, and Color's
-    # own header+value column below) with the stray placeholder run in
-    # the neighboring column cleared.
-    r = runs_of(t3, 1, 0); set_value(r[0], model)
-    for extra in t3.rows[1].cells[1].paragraphs[0].runs:
-        clear(extra)
-    r = runs_of(t3, 1, 2); set_value(r[0], serial)
-    for extra in r[1:]:
-        clear(extra)
-    for extra in t3.rows[1].cells[3].paragraphs[0].runs:
-        clear(extra)
-    r = runs_of(t3, 1, 5); set_value(r[0], color)
-
-    # -- declaration block --
-    r = runs_of(t4, 0, 0); set_value(r[3], govid)
-    r = runs_of(t4, 0, 1); set_value(r[1], " " + name)
-    r = runs_of(t4, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    r = runs_of(t4, 1, 1); set_value(r[3], " " + department)
-
-    # 2026-09 (v4): every template now carries an "البريد الالكتروني/" row in
-    # the employee table and a date in the signature block.
-    set_email(t2, data.get("email", ""))
-    set_signature_dates(d, date_str)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    d.save(str(output_path))
-    return output_path
-
-
-# ----------------------------------------------------------------------
-# Printer handover
-# ----------------------------------------------------------------------
-
-def fill_printer_handover(template_path, output_path, data):
-    d = docx.Document(str(template_path))
-    date_str, day_name, month_name = date_parts(data["date_obj"])
-    name, department, role = data["name"], data["department"], data["role"]
-    mobile, code, govid = data["mobile"], data["code"], data["govid"]
-    company = data["company"]
-    brand, model, serial, color = data["brand"], data["model"], data["serial"], data["color"]
-
-    t0, t1, t2, t3, t4, t5 = d.tables
-
-    # -- date line --
-    set_date_cell(t1, date_str)
-    set_after_label(t1, 0, 1, month_name)
-    set_after_label(t1, 0, 2, day_name)
-
-    # -- employee block --
-    append_value(t2.rows[0].cells[0].paragraphs[0], 1, " " + role)
-    append_value(t2.rows[0].cells[1].paragraphs[0], 1, " " + name)
-    r = runs_of(t2, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    r = runs_of(t2, 1, 1); set_value(r[1], " " + department)
-    r = runs_of(t2, 2, 0); set_value(r[1], " " + mobile)
-    set_after_label(t2, 2, 1, code)
-
-    # -- device table --
-    # Serial Number/Color were left vertically centered while
-    # Brand/Model were left top-aligned, on a row taller than one
-    # line (leftover from the header's own multi-line-sized
-    # formatting) - put the whole row back on one baseline.
-    for ci in (2, 3, 4, 5):
-        align_top(t3.rows[1].cells[ci])
-    r = runs_of(t3, 1, 0); set_value(r[0], brand)
-    r = runs_of(t3, 1, 1); set_value(r[0], model)
-    r = runs_of(t3, 1, 2); set_value(r[0], serial)
-    r = runs_of(t3, 1, 5); set_value(r[0], color)
-
-    # -- declaration block --
-    r = runs_of(t4, 0, 0); set_value(r[4], govid)
-    r = runs_of(t4, 0, 1); set_value(r[1], " " + name)
-    r = runs_of(t4, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    r = runs_of(t4, 1, 1); set_value(r[3], " " + department)
-
-    # 2026-09 (v4): every template now carries an "البريد الالكتروني/" row in
-    # the employee table and a date in the signature block.
-    set_email(t2, data.get("email", ""))
-    set_signature_dates(d, date_str)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    d.save(str(output_path))
-    return output_path
-
-
-# ----------------------------------------------------------------------
-# Flash drive handover
-# ----------------------------------------------------------------------
-
-def fill_flash_handover(template_path, output_path, data):
-    d = docx.Document(str(template_path))
-    date_str, day_name, month_name = date_parts(data["date_obj"])
-    name, department, role = data["name"], data["department"], data["role"]
-    mobile, code, govid = data["mobile"], data["code"], data["govid"]
-    company = data["company"]
-    brand, capacity, model, color = data["brand"], data["capacity"], data["model"], data["color"]
-
-    t0, t1, t2, t3, t4, t5 = d.tables
-
-    # -- date line --
-    set_date_cell(t1, date_str)
-    set_after_label(t1, 0, 1, month_name)
-    set_after_label(t1, 0, 2, day_name)
-
-    # -- employee block --
-    # Role and (below) declaration-department runs are stored
-    # value-first, label-last in this document.
-    r = runs_of(t2, 0, 0); set_value(r[0], role)
-    r = runs_of(t2, 0, 1); set_value(r[2], name)
-    r = runs_of(t2, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    r = runs_of(t2, 1, 1); set_value(r[3], department)
-    r = runs_of(t2, 2, 0); set_value(r[4], " " + mobile); clear(r[5])
-    r = runs_of(t2, 2, 1); set_value(r[1], code)
-
-    # -- device table --
-    # Header row has a stray duplicate "Model" run tacked onto the end
-    # of the Capacity header cell - clear it for a clean header. And,
-    # as in the printer template, Model/Color were left vertically
-    # centered while Brand/Capacity were left top-aligned on a row
-    # taller than one line - put the whole row back on one baseline.
-    clear(t3.rows[0].cells[1].paragraphs[0].runs[-1])
-    for ci in (2, 3, 4, 5):
-        align_top(t3.rows[1].cells[ci])
-    r = runs_of(t3, 1, 0); set_value(r[0], brand)
-    r = runs_of(t3, 1, 1); set_value(r[1], capacity)
-    r = runs_of(t3, 1, 2); set_value(r[0], model)
-    r = runs_of(t3, 1, 5); set_value(r[0], color)
-
-    # -- declaration block --
-    r = runs_of(t4, 0, 0); set_value(r[3], govid)
-    r = runs_of(t4, 0, 1); set_value(r[1], " " + name)
-    r = runs_of(t4, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    r = runs_of(t4, 1, 1); set_value(r[2], department)
-
-    # 2026-09 (v4): every template now carries an "البريد الالكتروني/" row in
-    # the employee table and a date in the signature block.
-    set_email(t2, data.get("email", ""))
-    set_signature_dates(d, date_str)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    d.save(str(output_path))
-    return output_path
-
-
-# ----------------------------------------------------------------------
-# Hard disk handover
-# ----------------------------------------------------------------------
-
-def fill_hard_handover(template_path, output_path, data):
-    d = docx.Document(str(template_path))
-    date_str, day_name, month_name = date_parts(data["date_obj"])
-    name, department, role = data["name"], data["department"], data["role"]
-    mobile, code, govid = data["mobile"], data["code"], data["govid"]
-    company = data["company"]
-    brand, model, serial, color = data["brand"], data["model"], data["serial"], data["color"]
-
-    t0, t1, t2, t3, t4, t5 = d.tables
-
-    # Device table columns overflow the page width - same defect (and
-    # same declared widths) already fixed in router.docx/km.
-    fix_table_width(t3, 10500)
-
-    # -- date line --
-    set_date_cell(t1, date_str)
-    set_after_label(t1, 0, 1, month_name)
-    set_after_label(t1, 0, 2, day_name)
-
-    # -- employee block --
-    # Same reversed-run, typo'd role label as router.docx.
-    r = runs_of(t2, 0, 0); set_value(r[1], "الوظيفة")
-    append_value(t2.rows[0].cells[0].paragraphs[0], 2, " " + role)
-    r = runs_of(t2, 0, 1); set_value(r[1], " " + name)
-    r = runs_of(t2, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    append_value(t2.rows[1].cells[1].paragraphs[0], 1, department)
-    r = runs_of(t2, 2, 0); set_value(r[1], " " + mobile)
-    set_after_label(t2, 2, 1, code)
-
-    # -- device table --
-    r = runs_of(t3, 1, 0); set_value(r[0], brand)
-    r = runs_of(t3, 1, 1); set_value(r[0], model)
-    r = runs_of(t3, 1, 2); set_value(r[0], serial)
-    r = runs_of(t3, 1, 4); set_value(r[0], color)
-
-    # -- declaration block --
-    r = runs_of(t4, 0, 0); set_value(r[3], govid)
-    append_value(t4.rows[0].cells[1].paragraphs[0], 1, " " + name)
-    r = runs_of(t4, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    r = runs_of(t4, 1, 1); set_value(r[4], " " + department)
-
-    # 2026-09 (v4): every template now carries an "البريد الالكتروني/" row in
-    # the employee table and a date in the signature block.
-    set_email(t2, data.get("email", ""))
-    set_signature_dates(d, date_str)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    d.save(str(output_path))
-    return output_path
-
-
-# ----------------------------------------------------------------------
-# Screen / monitor handover
-# ----------------------------------------------------------------------
-
-def fill_screen_handover(template_path, output_path, data):
-    """Screen/monitor handover. Template refreshed 2026-09 (v2) - same
-    field set as before (model/serial/color), new source file."""
-    d = docx.Document(str(template_path))
-    date_str, day_name, month_name = date_parts(data["date_obj"])
-
-    name, department, role = data["name"], data["department"], data["role"]
-    mobile, code, govid = data["mobile"], data["code"], data["govid"]
-    company = data["company"]
-    model, serial, color = data["model"], data["serial"], data["color"]
-
-    t0, t1, t2, t3, t4, t5 = d.tables
-
-    set_date_cell(t1, date_str)
-    set_after_label(t1, 0, 1, month_name)
-    set_after_label(t1, 0, 2, day_name)
-
-    r = runs_of(t2, 0, 0); set_value(r[2], role)
-    r = runs_of(t2, 0, 1); set_value(r[1], " " + name)
-    r = runs_of(t2, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    p = t2.rows[1].cells[1].paragraphs[0]
-    nr = append_value(p, 1, department); match_size(nr, p.runs[0])
-    set_after_label(t2, 2, 0, mobile)
-    p = t2.rows[2].cells[1].paragraphs[0]
-    nr = set_after_label(t2, 2, 1, code); match_size(nr, p.runs[0])
-
-    r = runs_of(t3, 1, 0); set_value(r[0], model); clear(r[1])
-    r = runs_of(t3, 1, 2); set_value(r[0], serial)
-    r = runs_of(t3, 1, 5); set_value(r[0], color)
-
-    r = runs_of(t4, 0, 0); set_value(r[2], govid)
-    r = runs_of(t4, 0, 1); set_value(r[1], name)
-    r = runs_of(t4, 1, 0); set_value(r[0], "لدى شركة/ " + company + " ")
-    r = runs_of(t4, 1, 1); set_value(r[4], department); match_size(r[4], r[1])
-
-    # 2026-09 (v4): every template now carries an "البريد الالكتروني/" row in
-    # the employee table and a date in the signature block.
-    set_email(t2, data.get("email", ""))
-    set_signature_dates(d, date_str)
+    values = {
+        "FILL_DATE": date_str,
+        "FILL_MONTH": month_name,
+        "FILL_DAY": day_name,
+        "FILL_DAYNAME": day_name,
+        "FILL_NAME": data["name"],
+        "FILL_ROLE": data["role"],
+        "FILL_DEPARTMENT": data["department"],
+        "FILL_MOBILE": data["mobile"],
+        "FILL_EMAIL": (data.get("email") or "").strip(),
+        "FILL_CODE": data["code"],
+        "FILL_GOVID": data["govid"],
+        "FILL_COMPANY": data.get("company") or DEFAULT_COMPANY,
+    }
+    # Device fields, offered for every template; each document fills in
+    # only the ones its own spec table actually asks for.
+    for key, token in (
+        ("model", "FILL_MODEL"), ("serial", "FILL_SERIAL"),
+        ("brand", "FILL_BRAND"), ("color", "FILL_COLOR"),
+        ("capacity", "FILL_CAPACITY"), ("sim_number", "FILL_SIM_NUMBER"),
+        ("storage", "FILL_STORAGE"), ("ram", "FILL_RAM"), ("cpu", "FILL_CPU"),
+    ):
+        if key in data:
+            values[token] = data[key]
+
+    specs = find_spec_tables(d)
+    tidy_document(d, values)
+    fill_placeholders(d, values)
+    level_spec_rows(specs)
+    for spec in specs:
+        drop_empty_columns(spec)
+    fit_to_page(d, specs)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     d.save(str(output_path))
@@ -1767,9 +1509,9 @@ TEMPLATES = {
     "keyboard_mouse_handover": {
         "label": "Keyboard & mouse handover",
         "label_ar": "محضر تسليم كيبورد وماوس",
-        "doc_file": "Keyboard and Mouse Handover Template.docx",
+        "doc_file": "keyboard_mouse_handover.docx",
         "filename_prefix": "استلام كيبورد وماوس",
-        "fill": fill_keyboard_mouse_handover,
+        "fill": fill_accessory_handover,
         "employee_fields": EMPLOYEE_FIELDS_WITH_EMAIL,
         "device_title": "Keyboard & mouse details",
         "device_fields": [
@@ -1785,9 +1527,9 @@ TEMPLATES = {
     "mouse_receipt": {
         "label": "Mouse handover",
         "label_ar": "محضر استلام ماوس",
-        "doc_file": "Mouse Receipt Template.docx",
+        "doc_file": "mouse_receipt.docx",
         "filename_prefix": "استلام ماوس",
-        "fill": fill_mouse_receipt,
+        "fill": fill_accessory_handover,
         "employee_fields": EMPLOYEE_FIELDS_WITH_EMAIL,
         "device_title": "Mouse details",
         "device_fields": [
@@ -1801,9 +1543,9 @@ TEMPLATES = {
     "screen_handover": {
         "label": "Screen handover",
         "label_ar": "محضر تسليم شاشة",
-        "doc_file": "Screen Handover Template.docx",
+        "doc_file": "screen_handover.docx",
         "filename_prefix": "تسليم شاشة",
-        "fill": fill_screen_handover,
+        "fill": fill_accessory_handover,
         "employee_fields": EMPLOYEE_FIELDS_WITH_EMAIL,
         "device_title": "Screen details",
         "device_fields": [
@@ -1818,9 +1560,9 @@ TEMPLATES = {
     "router_handover": {
         "label": "Router handover",
         "label_ar": "محضر تسليم راوتر بشريحة",
-        "doc_file": "Router Handover Template.docx",
+        "doc_file": "router_handover.docx",
         "filename_prefix": "استلام راوتر",
-        "fill": fill_router_handover,
+        "fill": fill_accessory_handover,
         "employee_fields": EMPLOYEE_FIELDS_WITH_EMAIL,
         "device_title": "Router details",
         "device_fields": [
@@ -1837,9 +1579,9 @@ TEMPLATES = {
     "headset_handover": {
         "label": "Headset handover",
         "label_ar": "محضر تسليم سماعة",
-        "doc_file": "Headset Handover Template.docx",
+        "doc_file": "headset_handover.docx",
         "filename_prefix": "استلام سماعة",
-        "fill": fill_headset_handover,
+        "fill": fill_accessory_handover,
         "employee_fields": EMPLOYEE_FIELDS_WITH_EMAIL,
         "device_title": "Headset details",
         "device_fields": [
@@ -1854,9 +1596,9 @@ TEMPLATES = {
     "printer_handover": {
         "label": "Printer handover",
         "label_ar": "محضر تسليم طابعة",
-        "doc_file": "Printer Handover Template.docx",
+        "doc_file": "printer_handover.docx",
         "filename_prefix": "استلام طابعة",
-        "fill": fill_printer_handover,
+        "fill": fill_accessory_handover,
         "employee_fields": EMPLOYEE_FIELDS_WITH_EMAIL,
         "device_title": "Printer details",
         "device_fields": [
@@ -1872,9 +1614,9 @@ TEMPLATES = {
     "flash_handover": {
         "label": "Flash drive handover",
         "label_ar": "محضر تسليم فلاشة",
-        "doc_file": "Flash Drive Handover Template.docx",
+        "doc_file": "flash_handover.docx",
         "filename_prefix": "استلام فلاشة",
-        "fill": fill_flash_handover,
+        "fill": fill_accessory_handover,
         "employee_fields": EMPLOYEE_FIELDS_WITH_EMAIL,
         "device_title": "Flash drive details",
         "device_fields": [
@@ -1890,9 +1632,9 @@ TEMPLATES = {
     "hard_handover": {
         "label": "Hard disk handover",
         "label_ar": "محضر تسليم هارد",
-        "doc_file": "Hard Disk Handover Template.docx",
+        "doc_file": "hard_handover.docx",
         "filename_prefix": "استلام هارد",
-        "fill": fill_hard_handover,
+        "fill": fill_accessory_handover,
         "employee_fields": EMPLOYEE_FIELDS_WITH_EMAIL,
         "device_title": "Hard disk details",
         "device_fields": [
