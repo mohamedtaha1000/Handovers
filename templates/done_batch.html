@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Documents ready{% endblock %}
+{% block content %}
+<div class="card narrow done-card">
+  <div class="done-icon">
+    <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+  </div>
+  <h1>{{ records|length }} documents ready</h1>
+  <div class="summary-box">
+    <div class="summary-row"><span>Name</span><b>{{ records[0].name }}</b></div>
+    <div class="summary-row"><span>Department</span><b>{{ records[0].department }}</b></div>
+    <div class="summary-row"><span>Date</span><b>{{ records[0].handover_date }}</b></div>
+  </div>
+
+  <ul class="batch-list">
+    {% for r in records %}
+    <li>
+      <span class="batch-list-label">{{ r.template_label }}</span>
+      <a class="download-link" href="{{ url_for('get_file', record_id=r.id) }}">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+        Download
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+
+  <a class="button full" href="{{ url_for('download_batch', ids=ids) }}">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+    Download all {{ records|length }} as .zip
+  </a>
+  <p class="links">
+    <a href="{{ url_for('new_document', template_id=records[0].template_id, employee=records[0].id) }}">+ Another for this person</a>
+    &nbsp;·&nbsp;
+    <a href="{{ url_for('index') }}">+ Create another</a>
+    &nbsp;·&nbsp;
+    <a href="{{ url_for('history') }}">View history</a>
+  </p>
+</div>
+{% endblock %}
