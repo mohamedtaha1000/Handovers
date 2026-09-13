@@ -1687,11 +1687,6 @@ TEMPLATES = {
 # beside the labels so there is one place to describe a document type.
 TEMPLATE_GROUPS = ("Computers", "Peripherals", "Storage & network")
 
-# What a new joiner is usually handed on their first morning. The picker
-# offers this as one shortcut rather than making someone tick four boxes.
-STARTER_SET = ("laptop_handover", "mouse_receipt",
-               "keyboard_mouse_handover", "headset_handover")
-
 
 def all_fields(template_id):
     """Every field key this template's form should collect (employee +

@@ -118,6 +118,11 @@
                title="Edit and regenerate" aria-label="Edit the document for {{ r.name }}">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
             </a>
+            <a class="icon-action" href="{{ mailto.get(r.id, '') }}"
+               title="Email {{ notify_name }} about this"
+               aria-label="Email {{ notify_name }} about the document for {{ r.name }}">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+            </a>
             <form method="post" action="{{ url_for('delete_history', record_id=r.id) }}" class="delete-form" onsubmit="return confirm('Permanently delete the record for {{ r.name }}? This also deletes the generated .docx file. This cannot be undone.');">
               <input type="hidden" name="q" value="{{ q }}">
               <input type="hidden" name="type" value="{{ type_filter }}">

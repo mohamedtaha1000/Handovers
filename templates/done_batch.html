@@ -28,6 +28,12 @@
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
     Download all {{ records|length }} as .zip
   </a>
+  {% if mailto %}
+  <a class="button-secondary full" href="{{ mailto }}">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+    Email {{ notify_name }} about all {{ records|length }}
+  </a>
+  {% endif %}
   <p class="links">
     <a href="{{ url_for('new_document', template_id=records[0].template_id, employee=records[0].id) }}">+ Another for this person</a>
     &nbsp;·&nbsp;

@@ -612,16 +612,6 @@ td.wrap { min-width: 110px; }
 .picker-label-ar { color: var(--muted); font-size: .85rem; margin-top: 2px; }
 .picker-arrow { flex: none; color: var(--muted); }
 
-/* ---------- Footer ---------- */
-
-.footer {
-  text-align: center;
-  color: var(--muted);
-  font-size: .78rem;
-  padding: 20px;
-}
-
-
 /* ---------- Reuse a previous employee ---------- */
 
 /* The suggestion list hangs off the field it belongs to, so the field's
@@ -887,57 +877,6 @@ input:focus, select:focus { background: #fff; }
   letter-spacing: .5px; text-transform: uppercase;
 }
 
-.starter-card {
-  display: flex; align-items: center; gap: 14px;
-  background: var(--navy);
-  color: #fff;
-  border-radius: var(--radius);
-  padding: 16px 20px;
-  text-decoration: none;
-}
-.starter-card:hover { background: var(--navy-2); }
-.starter-icon {
-  width: 38px; height: 38px; flex: none;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, .13);
-  display: flex; align-items: center; justify-content: center;
-}
-.starter-text { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.starter-text b { font-size: .95rem; font-weight: 650; }
-.starter-text span { font-size: .82rem; color: rgba(255, 255, 255, .72); }
-.starter-go {
-  flex: none;
-  padding: 9px 16px; border-radius: 8px;
-  background: #fff; color: var(--navy);
-  font-size: .85rem; font-weight: 600;
-}
-@media (max-width: 560px) {
-  .starter-card { flex-wrap: wrap; }
-  .starter-go { width: 100%; text-align: center; }
-}
-
-.popular-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-@media (max-width: 760px) { .popular-grid { grid-template-columns: 1fr; } }
-.popular-card {
-  display: flex; align-items: center; gap: 12px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 11px;
-  padding: 14px 16px;
-  box-shadow: 0 1px 3px rgba(20, 23, 43, .04);
-  text-decoration: none; color: var(--text);
-  transition: border-color .15s, box-shadow .15s;
-}
-.popular-card:hover { border-color: var(--accent); box-shadow: 0 4px 14px rgba(58, 109, 240, .12); }
-.popular-icon {
-  width: 34px; height: 34px; flex: none;
-  border-radius: 9px;
-  display: flex; align-items: center; justify-content: center;
-}
-.popular-text { min-width: 0; display: flex; flex-direction: column; }
-.popular-text b { font-size: .9rem; font-weight: 600; }
-.popular-text span { font-size: .73rem; color: var(--muted); }
-
 .picker-card { padding: 0; overflow: hidden; }
 .picker-card.picked { border-color: var(--accent); background: var(--accent-light); }
 .picker-main {
@@ -1088,3 +1027,13 @@ td.nowrap { white-space: nowrap; }
 }
 .tap-action:hover { background: var(--bg); }
 .tap-action.danger:hover { background: var(--error-bg); color: var(--error-text); border-color: var(--error-border); }
+
+
+/* ---------- The email to the asset owner ---------- */
+
+.email-extras { margin: 0; border-top: none; padding-top: 0; }
+.email-extras > summary { font-weight: 600; color: var(--text); }
+.email-extras > summary { padding: 0; }
+.summary-note { font-size: .74rem; color: var(--muted); font-weight: 400; margin-inline-start: 4px; }
+.email-extras .grid { margin-top: 16px; }
+.button-secondary.full { display: flex; justify-content: center; width: 100%; margin-top: 8px; }
