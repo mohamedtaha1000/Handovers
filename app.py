@@ -26,7 +26,7 @@ import json
 import os
 import re
 import secrets
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from functools import wraps
 from pathlib import Path
 
@@ -227,12 +227,33 @@ def new_document(template_id):
         abort(404)
 
     if request.method == "POST":
-        field_keys = [f["key"] for f in all_fields(template_id)]
+        fields = all_fields(template_id)
+        field_keys = [f["key"] for f in fields]
         values = {k: request.form.get(k, "").strip() for k in field_keys}
 
         missing = [k for k in required_field_keys(template_id) if not values[k]]
         if missing:
             flash("Please fill in all required fields: " + ", ".join(missing))
+            return render_template(
+                "form.html", spec=spec, template_id=template_id,
+                data=request.form, today=date.today().isoformat(),
+            )
+
+        # Format checks (mobile number, national ID, ...) - only fields
+        # whose spec declares a "pattern" get checked; a value that's
+        # merely non-empty but the wrong shape (too short, letters where
+        # there should be digits, ...) is caught here rather than ending
+        # up wrong inside the generated document.
+        format_errors = []
+        for f in fields:
+            pattern = f.get("pattern")
+            if not pattern or not values.get(f["key"]):
+                continue
+            if not re.fullmatch(pattern, values[f["key"]]):
+                format_errors.append(f.get("pattern_msg") or f"{f['label']} is not the right format.")
+        if format_errors:
+            for msg in format_errors:
+                flash(msg)
             return render_template(
                 "form.html", spec=spec, template_id=template_id,
                 data=request.form, today=date.today().isoformat(),
@@ -326,10 +347,21 @@ def get_file(record_id):
 # History (search + permanent delete)
 # ----------------------------------------------------------------------
 
+HISTORY_PAGE_SIZE = 50
+
+
 @app.route("/history")
 @login_required
 def history():
     q = request.args.get("q", "").strip()
+    type_filter = request.args.get("type", "").strip()
+    date_from = request.args.get("from", "").strip()
+    date_to = request.args.get("to", "").strip()
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+    except ValueError:
+        page = 1
+
     query = Handover.query.order_by(Handover.created_at.desc())
     if q:
         like = f"%{q}%"
@@ -340,8 +372,117 @@ def history():
                 Handover.role.like(like),
             )
         )
-    records = query.limit(300).all()
-    return render_template("history.html", records=records, q=q)
+    if type_filter and type_filter in TEMPLATES:
+        query = query.filter(Handover.template_id == type_filter)
+    # Date range filters on created_at (a real datetime column) rather
+    # than handover_date (a free-form "D/M/YYYY" string the person typed
+    # in the form, not reliably sortable/comparable) - this is "when the
+    # document was generated", which is what a person browsing history
+    # usually means by a date range anyway.
+    if date_from:
+        try:
+            query = query.filter(Handover.created_at >= datetime.strptime(date_from, "%Y-%m-%d"))
+        except ValueError:
+            date_from = ""
+    if date_to:
+        try:
+            end = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+            query = query.filter(Handover.created_at < end)
+        except ValueError:
+            date_to = ""
+
+    total = query.count()
+    pages = max(1, (total + HISTORY_PAGE_SIZE - 1) // HISTORY_PAGE_SIZE)
+    page = min(page, pages)
+    records = query.offset((page - 1) * HISTORY_PAGE_SIZE).limit(HISTORY_PAGE_SIZE).all()
+
+    return render_template(
+        "history.html", records=records, q=q, type_filter=type_filter,
+        date_from=date_from, date_to=date_to, templates=TEMPLATES,
+        page=page, pages=pages, total=total, page_size=HISTORY_PAGE_SIZE,
+    )
+
+
+def _filtered_history_query():
+    """Builds the same filtered (but unpaginated) query used by both the
+    history page and the Excel export, so the two can never drift apart -
+    whatever's currently filtered/searched on screen is exactly what gets
+    exported."""
+    q = request.args.get("q", "").strip()
+    type_filter = request.args.get("type", "").strip()
+    date_from = request.args.get("from", "").strip()
+    date_to = request.args.get("to", "").strip()
+
+    query = Handover.query.order_by(Handover.created_at.desc())
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            db.or_(
+                Handover.name.like(like),
+                Handover.department.like(like),
+                Handover.role.like(like),
+            )
+        )
+    if type_filter and type_filter in TEMPLATES:
+        query = query.filter(Handover.template_id == type_filter)
+    if date_from:
+        try:
+            query = query.filter(Handover.created_at >= datetime.strptime(date_from, "%Y-%m-%d"))
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            end = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+            query = query.filter(Handover.created_at < end)
+        except ValueError:
+            pass
+    return query
+
+
+@app.route("/history/export.xlsx")
+@login_required
+def export_history():
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    from io import BytesIO
+
+    records = _filtered_history_query().all()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Handover history"
+
+    headers = ["Name", "Document type", "Department", "Position", "National ID",
+               "Handover date", "Generated by", "Generated at"]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    for r in records:
+        ws.append([
+            # National ID stays masked here too, same as the on-screen
+            # history table - exporting the full number would undo the
+            # point of masking it there in the first place.
+            r.name, r.template_label, r.department, r.role, mask_id(r.govid),
+            r.handover_date, r.created_by,
+            r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "",
+        ])
+
+    # Reasonable column widths rather than Excel's cramped default.
+    widths = [22, 26, 18, 20, 16, 14, 16, 18]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[chr(64 + i)].width = w
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    filename = f"handover-history-{date.today().isoformat()}.xlsx"
+    from flask import send_file
+    return send_file(
+        buf, as_attachment=True, download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @app.route("/delete/<int:record_id>", methods=["POST"])
@@ -355,8 +496,15 @@ def delete_history(record_id):
     db.session.delete(record)
     db.session.commit()
     flash(f"Deleted the record for {name}.")
-    q = request.form.get("q", "")
-    return redirect(url_for("history", q=q) if q else url_for("history"))
+    # Preserve whatever search/filter/page the delete was performed from,
+    # so deleting a row from page 3 of a filtered view doesn't bounce the
+    # person back to an unfiltered page 1.
+    keep = {}
+    for key in ("q", "type", "from", "to", "page"):
+        val = request.form.get(key, "")
+        if val:
+            keep[key] = val
+    return redirect(url_for("history", **keep))
 
 
 if __name__ == "__main__":
