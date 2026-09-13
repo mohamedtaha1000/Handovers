@@ -214,7 +214,13 @@ details summary::-webkit-details-marker { display: none; }
 details summary svg { transition: transform .15s; }
 details[open] summary svg { transform: rotate(180deg); }
 
-.form-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
+.form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
 
 /* ---------- Buttons ---------- */
 
@@ -438,6 +444,14 @@ td.strong { font-weight: 600; }
 td.muted { color: var(--muted); }
 .mono { font-variant-numeric: tabular-nums; letter-spacing: .5px; }
 .actions { text-align: end; }
+
+/* Every cell was nowrap, so one long job title made the whole table
+   wider than its card - and since the actions sit last, they were the
+   part pushed off the right edge. The text columns wrap instead; the
+   short ones (date, ID) and the action icons stay on one line. */
+td.wrap, th.wrap { white-space: normal; }
+td.wrap { min-width: 110px; }
+.actions, .actions-head { white-space: nowrap; }
 .download-link {
   color: var(--accent);
   text-decoration: none;
@@ -451,7 +465,12 @@ td.muted { color: var(--muted); }
 }
 .download-link:hover { background: var(--accent-light); }
 
-.actions { display: flex; justify-content: flex-end; align-items: center; gap: 2px; }
+/* Deliberately NOT display:flex - a flex <td> stops behaving like a
+   table cell, and combined with a shrink-to-fit width the icons spilled
+   left over the column beside them. Inline children plus nowrap keeps
+   the cell a real cell. */
+.actions { text-align: end; white-space: nowrap; }
+.actions > * { vertical-align: middle; }
 .delete-form { display: inline-flex; margin: 0; }
 .delete-link {
   background: none;
@@ -469,6 +488,37 @@ td.muted { color: var(--muted); }
   transition: background .15s;
 }
 .delete-link:hover { background: var(--error-bg); }
+
+/* Row actions are icons with tooltips rather than text links: three
+   labelled links pushed the table wider than the page, which pushed the
+   actions themselves off the right edge where nobody could reach them. */
+.icon-action {
+  color: var(--muted);
+  background: none;
+  border: none;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  margin: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.icon-action:hover { background: var(--bg); color: var(--text); }
+.icon-action.download:hover { background: var(--accent-light); color: var(--accent); }
+.icon-action.danger:hover { background: var(--error-bg); color: var(--error-text); }
+.actions-head { text-align: end; }
+
+/* "edited by X · date" under the person who generated the document. */
+.edited-note {
+  font-size: .76rem;
+  color: var(--muted);
+  font-style: italic;
+}
 
 .empty-state {
   text-align: center;

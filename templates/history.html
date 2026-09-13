@@ -62,23 +62,30 @@
           <th>National ID</th>
           <th>Date</th>
           <th>By</th>
-          <th class="no-print"></th>
+          <th class="no-print actions-head">Actions</th>
         </tr>
       </thead>
       <tbody>
         {% for r in records %}
         <tr>
-          <td class="strong">{{ r.name }}</td>
+          <td class="strong wrap">{{ r.name }}</td>
           <td class="muted">{{ r.template_label }}</td>
-          <td>{{ r.department }}</td>
-          <td>{{ r.role }}</td>
+          <td class="wrap">{{ r.department }}</td>
+          <td class="wrap">{{ r.role }}</td>
           <td class="mono">{{ r.govid|mask_id }}</td>
           <td>{{ r.handover_date }}</td>
-          <td class="muted">{{ r.created_by }}</td>
+          <td class="muted wrap">
+            {{ r.created_by }}
+            {% if r.updated_at %}<br><span class="edited-note" title="Last edited {{ r.updated_at.strftime('%Y-%m-%d %H:%M') }}">edited by {{ r.updated_by }}</span>{% endif %}
+          </td>
           <td class="actions no-print">
-            <a class="download-link" href="{{ url_for('get_file', record_id=r.id) }}">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
-              Download
+            <a class="icon-action download" href="{{ url_for('get_file', record_id=r.id) }}"
+               title="Download the .docx" aria-label="Download the document for {{ r.name }}">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+            </a>
+            <a class="icon-action" href="{{ url_for('edit_document', record_id=r.id) }}"
+               title="Edit and regenerate" aria-label="Edit the document for {{ r.name }}">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
             </a>
             <form method="post" action="{{ url_for('delete_history', record_id=r.id) }}" class="delete-form" onsubmit="return confirm('Permanently delete the record for {{ r.name }}? This also deletes the generated .docx file. This cannot be undone.');">
               <input type="hidden" name="q" value="{{ q }}">
@@ -86,9 +93,10 @@
               <input type="hidden" name="from" value="{{ date_from }}">
               <input type="hidden" name="to" value="{{ date_to }}">
               <input type="hidden" name="page" value="{{ page }}">
-              <button type="submit" class="delete-link">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6h16Z"/></svg>
-                Delete
+              <button type="submit" class="icon-action danger"
+                      title="Delete this record and its file"
+                      aria-label="Delete the record for {{ r.name }}">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6h16Z"/></svg>
               </button>
             </form>
           </td>
