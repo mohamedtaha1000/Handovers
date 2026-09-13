@@ -40,7 +40,7 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import inspect, text
 
 from fill_logic import (
-    TEMPLATES, TEMPLATE_GROUPS, STARTER_SET,
+    TEMPLATES, TEMPLATE_GROUPS,
     all_fields, required_field_keys, template_path,
 )
 import notify_email
@@ -225,7 +225,6 @@ def index():
     # employee half already filled in.
     return render_template(
         "picker.html", templates=TEMPLATES, groups=grouped_templates(),
-        popular=most_used(), starter_set=",".join(STARTER_SET),
         employee=request.args.get("employee", type=int),
     )
 
@@ -289,24 +288,6 @@ def grouped_templates():
     if loose:
         groups.append(("Other", loose))
     return groups
-
-
-def most_used(limit=3):
-    """The document types generated most often, so the handful that make
-    up most of the work are one click away instead of somewhere in a list
-    of ten. Falls back to the registry's own order on a fresh install,
-    where there is nothing to count yet."""
-    counted = (db.session.query(Handover.template_id, db.func.count(Handover.id))
-               .group_by(Handover.template_id)
-               .order_by(db.func.count(Handover.id).desc())
-               .limit(limit + 4).all())
-    ranked = [tid for tid, _ in counted if tid in TEMPLATES][:limit]
-    for tid in TEMPLATES:
-        if len(ranked) >= limit:
-            break
-        if tid not in ranked:
-            ranked.append(tid)
-    return [(tid, TEMPLATES[tid]) for tid in ranked]
 
 
 # The fields worth showing in the history table's equipment column, in
