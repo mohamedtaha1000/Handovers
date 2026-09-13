@@ -1,0 +1,44 @@
+{#
+  One field, rendered the same way everywhere. `prefix` namespaces the
+  input name for the combined form, where several documents each want
+  their own "model" and "serial".
+#}
+{% macro field(f, data, prefix='') %}
+{% set key = prefix ~ f.key %}
+<div class="field{{ ' span-2' if f.wide else '' }}">
+  <label for="{{ key }}">{{ f.label }}{% if f.required %} <b>*</b>{% endif %}</label>
+  {% if f.suffix %}
+  <div class="input-group">
+    <input id="{{ key }}" name="{{ key }}" {% if f.required %}required{% endif %}
+           value="{{ data.get(key, data.get(f.key, '')) }}" placeholder="username"
+           {% if f.key == 'code' or f.key == 'name' %}autocomplete="off"{% endif %}>
+    <span class="suffix">{{ f.suffix }}</span>
+  </div>
+  {% else %}
+  <input id="{{ key }}" name="{{ key }}" {% if f.required %}required{% endif %}
+         value="{{ data.get(key, data.get(f.key, '')) }}"
+         {% if f.inputmode %}inputmode="{{ f.inputmode }}"{% endif %}
+         {% if f.maxlength %}maxlength="{{ f.maxlength }}"{% endif %}
+         {% if f.pattern %}pattern="{{ f.pattern }}" title="{{ f.pattern_msg or '' }}"{% endif %}
+         {% if f.key in ('name', 'code') %}data-employee-lookup autocomplete="off"{% endif %}
+         placeholder="{{ f.placeholder or '' }}">
+  {% if f.pattern_msg %}<p class="field-hint">{{ f.pattern_msg }}</p>{% endif %}
+  {% endif %}
+</div>
+{% endmacro %}
+
+{# The "already has one of these" notice, shown above the submit button. #}
+{% macro duplicate_notice(spec, dup) %}
+<div class="flash info dup-notice">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+  <div>
+    <b class="flash-title">{{ spec.label }} — this person already has one</b>
+    <p>
+      Generated {{ dup.handover_date }}{% if dup.created_by %} by {{ dup.created_by }}{% endif %}.
+      <a href="{{ url_for('get_file', record_id=dup.id) }}">Download it</a> ·
+      <a href="{{ url_for('edit_document', record_id=dup.id) }}">Edit it instead</a>
+    </p>
+    <p class="dup-hint">If this really is a second one, continue below.</p>
+  </div>
+</div>
+{% endmacro %}

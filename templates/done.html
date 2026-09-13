@@ -19,6 +19,8 @@
   <p class="links">
     <a href="{{ url_for('edit_document', record_id=record.id) }}">Edit this document</a>
     &nbsp;·&nbsp;
+    <a href="{{ url_for('index', employee=record.id) }}">+ Another for this person</a>
+    &nbsp;·&nbsp;
     <a href="{{ url_for('index') }}">+ Create another</a>
     &nbsp;·&nbsp;
     <a href="{{ url_for('history') }}">View history</a>

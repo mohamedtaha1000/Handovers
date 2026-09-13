@@ -188,7 +188,11 @@ def logout():
 @app.route("/")
 @login_required
 def index():
-    return render_template("picker.html", templates=TEMPLATES)
+    # ?employee=<record id> carries "another document for this person"
+    # through the picker, so whichever type is chosen next opens with the
+    # employee half already filled in.
+    return render_template("picker.html", templates=TEMPLATES,
+                           employee=request.args.get("employee", type=int))
 
 
 # ----------------------------------------------------------------------
@@ -230,6 +234,94 @@ def generated_filename(template_id, name, date_obj, exclude=None):
         candidate = f"{base} ({n}).docx"
         n += 1
     return candidate
+
+
+# ----------------------------------------------------------------------
+# Employees already on file
+#
+# Every template asks for the same seven employee fields, and somebody
+# collecting a laptop usually collects a mouse, a keyboard and a headset
+# too - so the same national ID was being typed out four times, each one
+# a fresh chance to get a digit wrong on a document that gets signed.
+# The details are already in the history; these helpers hand them back.
+# ----------------------------------------------------------------------
+
+# Fields that describe the person rather than the equipment. Only these
+# are ever copied from a previous document - the serial number of the
+# laptop they were given last year must not follow them onto a new one.
+EMPLOYEE_KEYS = ("name", "department", "role", "mobile", "email", "code", "govid")
+
+
+def employee_identity(record):
+    """What makes two records the same person. The employee code is the
+    real identifier; the national ID backs it up for older records that
+    predate the code field, and the name is the last resort."""
+    fields = record.fields
+    code = (fields.get("code") or "").strip().lower()
+    govid = (record.govid or "").strip()
+    return code or govid or (record.name or "").strip().lower()
+
+
+def known_employees(limit=400):
+    """One entry per person, taken from their most recent document.
+
+    Most recent matters: someone who changed department should come back
+    with the department they are in now, not the one they were in when
+    they were first issued a laptop."""
+    records = (Handover.query
+               .order_by(Handover.created_at.desc(), Handover.id.desc())
+               .limit(limit).all())
+    people = {}
+    for record in records:
+        key = employee_identity(record)
+        if not key or key in people:
+            continue
+        fields = record.fields
+        entry = {k: (fields.get(k) or "") for k in EMPLOYEE_KEYS}
+        entry["name"] = entry["name"] or record.name or ""
+        entry["department"] = entry["department"] or record.department or ""
+        entry["role"] = entry["role"] or record.role or ""
+        entry["govid"] = entry["govid"] or record.govid or ""
+        if entry["name"]:
+            people[key] = entry
+    return list(people.values())
+
+
+@app.route("/api/employees")
+@login_required
+def api_employees():
+    """Feeds the "reuse a previous employee" suggestions on the form."""
+    query = request.args.get("q", "").strip().lower()
+    people = known_employees()
+    if query:
+        people = [p for p in people
+                  if query in p["name"].lower()
+                  or query in p["code"].lower()
+                  or query in p["department"].lower()]
+    return {"employees": people[:8]}
+
+
+def find_duplicate(template_id, values, exclude_id=None):
+    """An earlier document of this same type for this same person, if
+    there is one. Two handovers of the same thing to the same person is
+    usually a mistake - or a sign the replacement template was the one
+    actually wanted - so it is worth asking before generating another."""
+    code = (values.get("code") or "").strip()
+    govid = (values.get("govid") or "").strip()
+    name = (values.get("name") or "").strip()
+
+    query = Handover.query.filter(Handover.template_id == template_id)
+    if exclude_id is not None:
+        query = query.filter(Handover.id != exclude_id)
+    for record in query.order_by(Handover.created_at.desc()).limit(200).all():
+        fields = record.fields
+        if code and (fields.get("code") or "").strip() == code:
+            return record
+        if govid and (record.govid or "").strip() == govid:
+            return record
+        if not code and not govid and name and (record.name or "").strip() == name:
+            return record
+    return None
 
 
 # ----------------------------------------------------------------------
@@ -291,11 +383,12 @@ def collect_values(template_id, form):
     return values, fill_data, date_obj, errors
 
 
-def render_form(template_id, data, record=None):
+def render_form(template_id, data, record=None, duplicate=None):
     spec = TEMPLATES[template_id]
     return render_template(
         "form.html", spec=spec, template_id=template_id,
         data=data, today=date.today().isoformat(), record=record,
+        duplicate=duplicate,
     )
 
 
@@ -368,7 +461,7 @@ def new_document(template_id):
         values, fill_data, date_obj, errors = collect_values(template_id, request.form)
         if errors:
             for message in errors:
-                flash(message)
+                flash(message, "error")
             return render_form(template_id, request.form)
 
         # Stored on disk under a human-readable, collision-safe name (see
@@ -377,10 +470,18 @@ def new_document(template_id):
         # The name a person sees when they download from the site is
         # computed separately in display_filename() and can differ (it
         # follows STM's Arabic document-naming convention).
+        # Ask once before making a second document of the same type for
+        # the same person. The answer travels back in a hidden field, so
+        # confirming doesn't lose anything already typed.
+        if not request.form.get("confirm_duplicate"):
+            duplicate = find_duplicate(template_id, values)
+            if duplicate is not None:
+                return render_form(template_id, request.form, duplicate=duplicate)
+
         internal_name = generated_filename(template_id, values["name"], date_obj)
         problem = write_document(template_id, fill_data, internal_name)
         if problem:
-            flash(problem)
+            flash(problem, "error")
             return render_form(template_id, request.form)
 
         record = Handover(
@@ -397,7 +498,26 @@ def new_document(template_id):
 
         return redirect(url_for("done", record_id=record.id))
 
-    return render_form(template_id, {})
+    # "Another document for this person" arrives as ?employee=<record id>,
+    # which pre-fills the employee half of the form and leaves the
+    # equipment half empty.
+    prefill = {}
+    source_id = request.args.get("employee", type=int)
+    if source_id:
+        source = db.session.get(Handover, source_id)
+        if source is not None:
+            fields = source.fields
+            prefill = {k: fields.get(k, "") for k in EMPLOYEE_KEYS if fields.get(k)}
+            prefill.setdefault("name", source.name or "")
+            prefill.setdefault("department", source.department or "")
+            prefill.setdefault("role", source.role or "")
+            prefill.setdefault("govid", source.govid or "")
+            for f in all_fields(template_id):
+                suffix = f.get("suffix")
+                value = prefill.get(f["key"], "")
+                if suffix and isinstance(value, str) and value.endswith(suffix):
+                    prefill[f["key"]] = value[: -len(suffix)]
+    return render_form(template_id, prefill)
 
 
 # ----------------------------------------------------------------------
@@ -416,14 +536,14 @@ def edit_document(record_id):
     record = Handover.query.get_or_404(record_id)
     template_id = record.template_id
     if template_id not in TEMPLATES:
-        flash("That document was made from a template this site no longer has.")
+        flash("That document was made from a template this site no longer has.", "error")
         return redirect(url_for("history"))
 
     if request.method == "POST":
         values, fill_data, date_obj, errors = collect_values(template_id, request.form)
         if errors:
             for message in errors:
-                flash(message)
+                flash(message, "error")
             return render_form(template_id, request.form, record=record)
 
         previous_name = record.filename
@@ -431,7 +551,7 @@ def edit_document(record_id):
             template_id, values["name"], date_obj, exclude=previous_name)
         problem = write_document(template_id, fill_data, internal_name)
         if problem:
-            flash(problem)
+            flash(problem, "error")
             return render_form(template_id, request.form, record=record)
 
         if previous_name != internal_name:
@@ -450,10 +570,180 @@ def edit_document(record_id):
         record.updated_at = datetime.utcnow()
         db.session.commit()
 
-        flash(f"Updated the document for {record.name}.")
+        flash(f"Saved. The document for {record.name} has been generated again.", "success")
         return redirect(url_for("done", record_id=record.id))
 
     return render_form(template_id, form_data_from_record(record), record=record)
+
+
+# ----------------------------------------------------------------------
+# Several documents for one person, in one pass
+#
+# A new joiner typically collects a laptop, a mouse, a keyboard and a
+# headset on their first morning - four documents whose employee half is
+# identical. This collects that half once and each piece of equipment
+# separately, then generates the lot.
+#
+# Device fields are namespaced per template ("headset_handover__model")
+# because the templates genuinely collide: nearly all of them ask for a
+# "model", "serial" and "color", and without the prefix the headset's
+# serial would overwrite the laptop's.
+# ----------------------------------------------------------------------
+
+def scoped_form(template_id, form):
+    """A view of the submitted form as this one template expects it:
+    shared employee fields as they are, device fields un-prefixed."""
+    prefix = f"{template_id}__"
+    scoped = {}
+    for key in form.keys():
+        if key.startswith(prefix):
+            scoped[key[len(prefix):]] = form.get(key)
+        elif key in EMPLOYEE_KEYS or key == "date":
+            scoped[key] = form.get(key)
+    return scoped
+
+
+@app.route("/new", methods=["POST"])
+@login_required
+def new_batch_start():
+    """Picker -> combined form. A single tick just goes to the normal
+    one-document form, which is a better page for that job."""
+    chosen = [t for t in request.form.getlist("template_id") if t in TEMPLATES]
+    if not chosen:
+        flash("Pick at least one document to create.", "error")
+        return redirect(url_for("index"))
+    employee = request.args.get("employee", type=int)
+    if len(chosen) == 1:
+        return redirect(url_for("new_document", template_id=chosen[0], employee=employee))
+    return redirect(url_for("new_batch", types=",".join(chosen), employee=employee))
+
+
+@app.route("/new-batch", methods=["GET", "POST"])
+@login_required
+def new_batch():
+    chosen = [t for t in request.values.get("types", "").split(",") if t in TEMPLATES]
+    if len(chosen) < 2:
+        return redirect(url_for("index"))
+
+    def show(data, duplicates=None, per_template_errors=None):
+        return render_template(
+            "batch_form.html", chosen=chosen, templates=TEMPLATES,
+            data=data, today=date.today().isoformat(),
+            types=",".join(chosen), duplicates=duplicates or {},
+            errors=per_template_errors or {},
+        )
+
+    if request.method == "POST":
+        collected, errors, duplicates = {}, {}, {}
+        for template_id in chosen:
+            values, fill_data, date_obj, problems = collect_values(
+                template_id, scoped_form(template_id, request.form))
+            if problems:
+                errors[template_id] = problems
+            collected[template_id] = (values, fill_data, date_obj)
+            if not request.form.get("confirm_duplicate"):
+                found = find_duplicate(template_id, values)
+                if found is not None:
+                    duplicates[template_id] = found
+
+        if errors:
+            # The employee half is shared, so the same missing name would
+            # otherwise be reported once per document.
+            seen = set()
+            for template_id, problems in errors.items():
+                for message in problems:
+                    if message not in seen:
+                        seen.add(message)
+                        flash(message, "error")
+            return show(request.form, duplicates=None, per_template_errors=errors)
+        if duplicates:
+            return show(request.form, duplicates=duplicates)
+
+        created = []
+        for template_id in chosen:
+            values, fill_data, date_obj = collected[template_id]
+            internal_name = generated_filename(template_id, values["name"], date_obj)
+            problem = write_document(template_id, fill_data, internal_name)
+            if problem:
+                flash(problem, "error")
+                return show(request.form)
+            record = Handover(
+                template_id=template_id,
+                name=values["name"], department=values["department"],
+                role=values["role"], govid=values.get("govid", ""),
+                handover_date=f"{date_obj.day}/{date_obj.month}/{date_obj.year}",
+                fields_json=json.dumps(fill_data, default=str),
+                filename=internal_name,
+                created_by=session.get("display_name", "-"),
+            )
+            db.session.add(record)
+            db.session.flush()
+            created.append(record.id)
+        db.session.commit()
+        return redirect(url_for("done_batch", ids=",".join(str(i) for i in created)))
+
+    prefill = {}
+    source_id = request.args.get("employee", type=int)
+    if source_id:
+        source = db.session.get(Handover, source_id)
+        if source is not None:
+            fields = source.fields
+            prefill = {k: fields.get(k, "") for k in EMPLOYEE_KEYS if fields.get(k)}
+            if prefill.get("email", "").endswith("@stm.com.eg"):
+                prefill["email"] = prefill["email"].split("@")[0]
+    return show(prefill)
+
+
+def batch_records(raw_ids):
+    ids = [int(i) for i in raw_ids.split(",") if i.strip().isdigit()]
+    found = {r.id: r for r in Handover.query.filter(Handover.id.in_(ids)).all()} if ids else {}
+    return [found[i] for i in ids if i in found]
+
+
+@app.route("/done-batch")
+@login_required
+def done_batch():
+    records = batch_records(request.args.get("ids", ""))
+    if not records:
+        return redirect(url_for("history"))
+    return render_template("done_batch.html", records=records,
+                           ids=request.args.get("ids", ""))
+
+
+@app.route("/files.zip")
+@login_required
+def download_batch():
+    """All of a batch's documents in one download, named the way a single
+    download names them."""
+    import zipfile
+    from io import BytesIO
+    from flask import send_file
+
+    records = batch_records(request.args.get("ids", ""))
+    if not records:
+        abort(404)
+
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as bundle:
+        used = set()
+        for record in records:
+            path = GENERATED_DIR / record.filename
+            if not path.exists():
+                continue
+            name = display_filename(record.template_id, record.name)
+            # Two documents of the same type for the same person would
+            # otherwise collide inside the zip and one would be lost.
+            stem, n = name[:-5], 2
+            while name in used:
+                name = f"{stem} ({n}).docx"
+                n += 1
+            used.add(name)
+            bundle.write(path, name)
+    buf.seek(0)
+
+    safe = FILENAME_UNSAFE_RE.sub("", records[0].name).strip() or "documents"
+    return send_file(buf, as_attachment=True, download_name=f"{safe}.zip",
+                     mimetype="application/zip")
 
 
 @app.route("/done/<int:record_id>")
@@ -631,7 +921,7 @@ def delete_history(record_id):
     name = record.name
     db.session.delete(record)
     db.session.commit()
-    flash(f"Deleted the record for {name}.")
+    flash(f"Deleted the record for {name}, and its generated file.", "success")
     # Preserve whatever search/filter/page the delete was performed from,
     # so deleting a row from page 3 of a filtered view doesn't bounce the
     # person back to an unfiltered page 1.

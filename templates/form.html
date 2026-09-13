@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_fields.html" as ui %}
 {% block title %}{{ spec.label }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -15,30 +16,16 @@
 
 <form method="post" id="handover-form"
       action="{% if record %}{{ url_for('edit_document', record_id=record.id) }}{% else %}{{ url_for('new_document', template_id=template_id) }}{% endif %}">
+  {% if duplicate %}<input type="hidden" name="confirm_duplicate" value="1">{% endif %}
+
   <div class="card section">
     <div class="section-title">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>
       <h2>Employee details</h2>
+      {% if not record %}<span class="section-hint">Start typing a name or code to reuse someone already on file</span>{% endif %}
     </div>
     <div class="grid">
-      {% for f in spec.employee_fields %}
-      <div class="field{{ ' span-2' if f.wide else '' }}">
-        <label>{{ f.label }}{% if f.required %} <b>*</b>{% endif %}</label>
-        {% if f.suffix %}
-        <div class="input-group">
-          <input name="{{ f.key }}" {% if f.required %}required{% endif %} value="{{ data.get(f.key,'') }}" placeholder="username">
-          <span class="suffix">{{ f.suffix }}</span>
-        </div>
-        {% else %}
-        <input name="{{ f.key }}" {% if f.required %}required{% endif %} value="{{ data.get(f.key,'') }}"
-               {% if f.inputmode %}inputmode="{{ f.inputmode }}"{% endif %}
-               {% if f.maxlength %}maxlength="{{ f.maxlength }}"{% endif %}
-               {% if f.pattern %}pattern="{{ f.pattern }}" title="{{ f.pattern_msg or '' }}"{% endif %}
-               placeholder="{{ f.placeholder or '' }}">
-        {% if f.pattern_msg %}<p class="field-hint">{{ f.pattern_msg }}</p>{% endif %}
-        {% endif %}
-      </div>
-      {% endfor %}
+      {% for f in spec.employee_fields %}{{ ui.field(f, data) }}{% endfor %}
     </div>
   </div>
 
@@ -48,15 +35,10 @@
       <h2>{{ spec.device_title }}</h2>
     </div>
     <div class="grid">
-      {% for f in spec.device_fields %}
-      <div class="field{{ ' span-2' if f.wide else '' }}">
-        <label>{{ f.label }}{% if f.required %} <b>*</b>{% endif %}</label>
-        <input name="{{ f.key }}" {% if f.required %}required{% endif %} value="{{ data.get(f.key,'') }}" placeholder="{{ f.placeholder or '' }}">
-      </div>
-      {% endfor %}
+      {% for f in spec.device_fields %}{{ ui.field(f, data) }}{% endfor %}
       <div class="field">
-        <label>Date</label>
-        <input type="date" name="date" value="{{ data.get('date', today) }}">
+        <label for="date">Date</label>
+        <input id="date" type="date" name="date" value="{{ data.get('date', today) }}">
       </div>
     </div>
   </div>
@@ -68,12 +50,7 @@
       <h2>{{ spec.device_title_2 }}</h2>
     </div>
     <div class="grid">
-      {% for f in spec.device_fields_2 %}
-      <div class="field{{ ' span-2' if f.wide else '' }}">
-        <label>{{ f.label }}{% if f.required %} <b>*</b>{% endif %}</label>
-        <input name="{{ f.key }}" {% if f.required %}required{% endif %} value="{{ data.get(f.key,'') }}" placeholder="{{ f.placeholder or '' }}">
-      </div>
-      {% endfor %}
+      {% for f in spec.device_fields_2 %}{{ ui.field(f, data) }}{% endfor %}
     </div>
   </div>
   {% endif %}
@@ -88,8 +65,8 @@
       <div class="grid">
         {% for f in spec.extra_fields %}
         <div class="field">
-          <label>{{ f.label }}</label>
-          <input name="{{ f.key }}" value="{{ data.get(f.key,'') }}" placeholder="{{ f.placeholder or f.default or '' }}">
+          <label for="{{ f.key }}">{{ f.label }}</label>
+          <input id="{{ f.key }}" name="{{ f.key }}" value="{{ data.get(f.key,'') }}" placeholder="{{ f.placeholder or f.default or '' }}">
         </div>
         {% endfor %}
       </div>
@@ -97,17 +74,18 @@
   </div>
   {% endif %}
 
+  {% if duplicate %}{{ ui.duplicate_notice(spec, duplicate) }}{% endif %}
+
   <div class="form-actions">
     <button type="submit" id="submit-btn">
-      <span class="btn-label">{% if record %}Save changes{% else %}Generate document{% endif %}</span>
+      <span class="btn-label">{% if record %}Save changes{% elif duplicate %}Generate anyway{% else %}Generate document{% endif %}</span>
       <span class="btn-spinner" hidden></span>
     </button>
-    {% if record %}
-    <a class="button-secondary" href="{{ url_for('history') }}">Cancel</a>
-    {% endif %}
+    {% if record %}<a class="button-secondary" href="{{ url_for('history') }}">Cancel</a>{% endif %}
   </div>
 </form>
 
+<script src="{{ url_for('static', filename='employee-lookup.js') }}"></script>
 <script>
   document.getElementById('handover-form').addEventListener('submit', function () {
     var btn = document.getElementById('submit-btn');

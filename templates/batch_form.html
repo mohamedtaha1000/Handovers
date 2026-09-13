@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% import "_fields.html" as ui %}
+{% block title %}{{ chosen|length }} documents{% endblock %}
+{% block content %}
+{% set first = templates[chosen[0]] %}
+<div class="page-head">
+  <p class="back-link"><a href="{{ url_for('index') }}">&larr; All document types</a></p>
+  <h1>{{ chosen|length }} documents for one person</h1>
+  <p class="lead">Employee details are filled in once and used for all of them</p>
+</div>
+
+<form method="post" id="handover-form" action="{{ url_for('new_batch', types=types) }}">
+  <input type="hidden" name="types" value="{{ types }}">
+  {% if duplicates %}<input type="hidden" name="confirm_duplicate" value="1">{% endif %}
+
+  <div class="card section">
+    <div class="section-title">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>
+      <h2>Employee details</h2>
+      <span class="section-hint">Start typing a name or code to reuse someone already on file</span>
+    </div>
+    <div class="grid">
+      {# Every template collects the same employee block, so the first
+         one's definition stands for all of them. #}
+      {% for f in first.employee_fields %}{{ ui.field(f, data) }}{% endfor %}
+      <div class="field">
+        <label for="date">Date</label>
+        <input id="date" type="date" name="date" value="{{ data.get('date', today) }}">
+      </div>
+    </div>
+  </div>
+
+  {% for tid in chosen %}
+  {% set spec = templates[tid] %}
+  <div class="card section{{ ' has-problem' if errors.get(tid) else '' }}">
+    <div class="section-title">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg>
+      <h2>{{ spec.label }}</h2>
+      <span class="section-hint">{{ spec.label_ar }}</span>
+    </div>
+    {% if duplicates.get(tid) %}{{ ui.duplicate_notice(spec, duplicates[tid]) }}{% endif %}
+    <div class="grid">
+      {% for f in spec.device_fields %}{{ ui.field(f, data, tid ~ '__') }}{% endfor %}
+      {% for f in spec.device_fields_2 or [] %}{{ ui.field(f, data, tid ~ '__') }}{% endfor %}
+    </div>
+    {% if spec.extra_fields %}
+    <details>
+      <summary>
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+        Optional extras
+      </summary>
+      <div class="grid">
+        {% for f in spec.extra_fields %}
+        <div class="field">
+          <label for="{{ tid }}__{{ f.key }}">{{ f.label }}</label>
+          <input id="{{ tid }}__{{ f.key }}" name="{{ tid }}__{{ f.key }}"
+                 value="{{ data.get(tid ~ '__' ~ f.key, '') }}"
+                 placeholder="{{ f.placeholder or f.default or '' }}">
+        </div>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <div class="form-actions">
+    <button type="submit" id="submit-btn">
+      <span class="btn-label">{% if duplicates %}Generate anyway{% else %}Generate {{ chosen|length }} documents{% endif %}</span>
+      <span class="btn-spinner" hidden></span>
+    </button>
+    <a class="button-secondary" href="{{ url_for('index') }}">Cancel</a>
+  </div>
+</form>
+
+<script src="{{ url_for('static', filename='employee-lookup.js') }}"></script>
+<script>
+  document.getElementById('handover-form').addEventListener('submit', function () {
+    var btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    btn.classList.add('loading');
+    btn.querySelector('.btn-label').textContent = 'Generating…';
+  });
+</script>
+{% endblock %}
