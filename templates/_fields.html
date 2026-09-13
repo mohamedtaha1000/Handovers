@@ -26,7 +26,8 @@
     <span class="suffix">{{ f.suffix }}</span>
   </div>
   {% else %}
-  <input id="{{ key }}" name="{{ key }}" {% if f.required %}required{% endif %}
+  <input id="{{ key }}" name="{{ key }}" type="{{ f.type or 'text' }}"
+         {% if f.required %}required{% endif %}
          value="{{ data.get(key, data.get(f.key, '')) }}"
          {% if f.inputmode %}inputmode="{{ f.inputmode }}"{% endif %}
          {% if f.maxlength %}maxlength="{{ f.maxlength }}"{% endif %}

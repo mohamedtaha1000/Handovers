@@ -1088,3 +1088,13 @@ td.nowrap { white-space: nowrap; }
 }
 .tap-action:hover { background: var(--bg); }
 .tap-action.danger:hover { background: var(--error-bg); color: var(--error-text); border-color: var(--error-border); }
+
+
+/* ---------- The email to the asset owner ---------- */
+
+.email-extras { margin: 0; border-top: none; padding-top: 0; }
+.email-extras > summary { font-weight: 600; color: var(--text); }
+.email-extras > summary { padding: 0; }
+.summary-note { font-size: .74rem; color: var(--muted); font-weight: 400; margin-inline-start: 4px; }
+.email-extras .grid { margin-top: 16px; }
+.button-secondary.full { display: flex; justify-content: center; width: 100%; margin-top: 8px; }

@@ -28,6 +28,7 @@ import re
 import secrets
 from datetime import datetime, date, timedelta
 from functools import wraps
+from urllib.parse import quote, urlencode
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -42,6 +43,7 @@ from fill_logic import (
     TEMPLATES, TEMPLATE_GROUPS, STARTER_SET,
     all_fields, required_field_keys, template_path,
 )
+import notify_email
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")  # reads SECRET_KEY / TEAM_PASSWORD from .env if present
@@ -59,6 +61,12 @@ app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
     "DATABASE_URL", f"sqlite:///{INSTANCE_DIR / 'handovers.db'}"
 )
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+# Who the "this has been handed over" email is addressed to. Kept in the
+# environment rather than the code so a change of owner - or of person in
+# the role - does not need an edit and a redeploy.
+NOTIFY_TO = os.environ.get("HANDOVER_NOTIFY_TO", "").strip()
+NOTIFY_NAME = os.environ.get("HANDOVER_NOTIFY_NAME", "Eng. Hegazy").strip()
 
 TEAM_PASSWORD = os.environ.get("TEAM_PASSWORD") or "changeme"
 if TEAM_PASSWORD == "changeme":
@@ -131,6 +139,14 @@ with app.app_context():
                 conn.execute(text("ALTER TABLE handover ADD COLUMN updated_by VARCHAR(120)"))
             if "updated_at" not in existing_cols:
                 conn.execute(text("ALTER TABLE handover ADD COLUMN updated_at DATETIME"))
+
+
+@app.context_processor
+def notify_details():
+    """Who the handover email goes to, available to every template so the
+    buttons and the optional section can name them rather than saying
+    "the asset owner"."""
+    return {"notify_name": NOTIFY_NAME, "notify_to": NOTIFY_TO}
 
 
 @app.template_filter("initials")
@@ -812,7 +828,8 @@ def done_batch():
     if not records:
         return redirect(url_for("history"))
     return render_template("done_batch.html", records=records,
-                           ids=request.args.get("ids", ""))
+                           ids=request.args.get("ids", ""),
+                           mailto=mailto_link(records))
 
 
 @app.route("/files.zip")
@@ -851,11 +868,58 @@ def download_batch():
                      mimetype="application/zip")
 
 
+# ----------------------------------------------------------------------
+# Telling the asset owner
+#
+# A mailto: link rather than a file to download: one click opens Outlook's
+# new-message window with the address, subject and details already in it,
+# and the person sends it from their own mailbox. Plain text is all a
+# mailto can carry - no ruled table, no attachment - which is the trade
+# for not having to open a downloaded file first. notify_email lays the
+# details out as labelled sections, which read the same in any font.
+# ----------------------------------------------------------------------
+
+# Outlook on Windows stops honouring a mailto around 2,000 characters.
+# One handover encodes to well under half that even with an Arabic name;
+# a batch of seven or more is what can reach it.
+MAILTO_LIMIT = 1900
+
+
+def build_mailto(records, detailed):
+    # No sender is passed and no sign-off is written: the draft opens in
+    # whoever's Outlook clicked the link, and their own signature goes
+    # under it.
+    body = notify_email.build_body(
+        records, greeting_name=NOTIFY_NAME, detailed=detailed)
+    query = urlencode({"subject": notify_email.subject_for(records), "body": body},
+                      quote_via=quote)
+    return f"mailto:{quote(NOTIFY_TO, safe='@.')}?{query}"
+
+
+def mailto_link(records):
+    """The mailto: URL for these documents, or None if there is nothing to
+    describe.
+
+    A long batch loses detail blocks from the end until the URL fits -
+    the message then names those items instead of describing them, which
+    is better than handing the mail client a URL it cuts off mid-word.
+    """
+    if not records:
+        return None
+    link = build_mailto(records, records)
+    detailed = list(records)
+    while len(link) > MAILTO_LIMIT and len(detailed) > 1:
+        detailed.pop()
+        link = build_mailto(records, detailed)
+    return link
+
+
 @app.route("/done/<int:record_id>")
 @login_required
 def done(record_id):
     record = Handover.query.get_or_404(record_id)
-    return render_template("done.html", record=record)
+    return render_template("done.html", record=record,
+                           mailto=mailto_link([record]))
 
 
 @app.route("/file/<int:record_id>")
@@ -929,6 +993,7 @@ def history():
         date_from=date_from, date_to=date_to, templates=TEMPLATES,
         page=page, pages=pages, total=total, page_size=HISTORY_PAGE_SIZE,
         equipment={r.id: equipment_summary(r) for r in records},
+        mailto={r.id: mailto_link([r]) for r in records},
         filters=active_filters(q, type_filter, date_from, date_to),
         matching=total,
         # `total` is what the current filters match; the heading wants the
