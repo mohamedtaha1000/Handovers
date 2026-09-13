@@ -1,194 +1,237 @@
-# STM Handover Documents — web app
+# STM Handover Documents
 
-A small internal website that fills STM's handover/receipt Word documents
-from a web form, instead of your teammate having to run a Python script
-from a terminal. It now supports **five document types** — pick one from
-the home page, fill in its form, download the finished `.docx`. Every
-document it generates is also saved to a searchable history page, and any
-history entry can be permanently deleted from there.
+An internal Flask web application for generating STM's handover and
+receipt Word documents from a browser form, replacing manual editing of
+`.docx` files. Every generated document is logged to a searchable,
+filterable history with export and print support.
 
-Document types currently set up:
-- Laptop handover
-- Laptop replacement (old device + new device)
-- Keyboard receipt
-- Mouse receipt
-- Screen handover
+## Contents
 
-It's built on the exact same tested document-filling approach as the
-original `fill_handover.py` script — same fixes for the RTL/slash and
-Arabic-label-gluing bugs, same formatting preservation — just extended in
-`fill_logic.py` to one fill function per document type, registered in a
-`TEMPLATES` dict that both builds the home-page picker and each
-document's form automatically.
+- [Overview](#overview)
+- [Requirements](#requirements)
+- [Running locally](#running-locally)
+- [Configuration](#configuration)
+- [Project structure](#project-structure)
+- [Features](#features)
+- [Deployment](#deployment)
+- [Security notes](#security-notes)
+- [Adding a new document type](#adding-a-new-document-type)
+- [Possible future enhancements](#possible-future-enhancements)
 
-## Adding another document type later
+## Overview
 
-1. Get STM's real filled-in example of the new document (like the four
-   that were turned into templates here) and drop it somewhere I can read
-   it.
-2. Tell me to add it — I'll sanitize it into a clean placeholder template
-   in `doc_templates/`, write its fill function in `fill_logic.py`, and
-   register it in the `TEMPLATES` dict with its field list. The picker
-   page and its form appear automatically — no other file needs to
-   change.
+Users log in with a shared team password, choose a document type, fill
+in a form, and download the completed `.docx`. Supported document types:
 
-## ⚠️ Before you deploy this publicly — read this
+| Document type              | Description                              |
+|------------------------------|-------------------------------------------|
+| Laptop handover              | Issuing a laptop to an employee            |
+| Laptop replacement           | Swapping an employee's laptop for a new one (records both the returned and issued device) |
+| Keyboard & mouse handover     | Issuing a keyboard-and-mouse combo kit to an employee |
+| Mouse handover                | Issuing a mouse (on its own) to an employee |
+| Screen handover               | Issuing a monitor to an employee           |
+| Router handover                | Issuing a SIM/data router to an employee   |
+| Headset handover               | Issuing a headset to an employee           |
+| Printer handover                | Issuing a printer to an employee          |
+| Flash drive handover             | Issuing a USB flash drive to an employee |
+| Hard disk handover               | Issuing an external hard disk to an employee |
 
-This form collects **national ID numbers** and other personal employee
-data. You told me you want it hosted publicly online (reachable from
-anywhere), which is the easiest option but also the one with the most
-exposure for this kind of data. A few things I built in to reduce the
-risk, and a few you should still decide on:
+Each document type is defined in a single registry
+(`fill_logic.py::TEMPLATES`), which drives the home page, the form for
+each document type, and the underlying `.docx` template — adding a new
+type does not require changing the Flask routes or HTML pages (see
+[Adding a new document type](#adding-a-new-document-type)).
 
-- **Login is required for every page.** Nobody can see the form, the
-  history, or download a file without your team's shared password.
-- **National IDs are masked** on the history list (only the last 4 digits
-  show). The full number is still in the generated `.docx` file itself and
-  briefly on the confirmation page right after creating it — that's
-  unavoidable, since the ID has to be in the actual document.
-- **Change `TEAM_PASSWORD` and `SECRET_KEY`** before you deploy (see
-  below) — the app refuses to run safely with the placeholder values.
-- I'd strongly recommend checking with whoever handles IT/security policy
-  at STM before putting real employee national IDs on a public host,
-  even a password-protected one. If that's not possible, at minimum use a
-  host that gives you HTTPS by default (all three suggested below do) and
-  don't share the URL or password outside your team.
-- If it turns out you only need your teammate(s) to reach it from the
-  office, hosting it on an internal server reachable only over your
-  company network/VPN instead of the public internet would be safer —
-  happy to help set that up instead if you change your mind.
+## Requirements
 
-## What's in this folder
+- Python 3.10+
+- The packages listed in `requirements.txt`
 
-```
-app.py                the Flask application (routes, login, database)
-fill_logic.py          the document-filling engine + the TEMPLATES registry
-                       (one fill function per document type, plus each
-                       one's field list - this is what the picker and
-                       forms are generated from)
-doc_templates/          the placeholder-based Word templates, one per
-                       document type (FILL_NAME etc. already removed):
-                         Laptop Handover Template.docx
-                         Laptop Replacement Template.docx
-                         Keyboard Receipt Template.docx
-                         Mouse Receipt Template.docx
-                         Screen Handover Template.docx
-templates/             the HTML pages (login, picker, form, done, history)
-static/style.css       styling
-static/stm-logo.png     the STM logo (pulled from a template) used in the header/favicon
-requirements.txt       Python dependencies
-Procfile               tells hosting platforms how to start the app (gunicorn)
-.env                    your two secrets go here (see below) - keep this file private
-.env.example            a blank reference copy of .env, safe to check into git
-```
+## Running locally
 
-The old single `Template.docx` in the folder root is no longer used by
-the app (it's been replaced by `doc_templates/Laptop Handover Template.docx`,
-functionally identical) - safe to delete whenever you like, it's just
-left over.
-
-## Running it on your own computer first
-
-```
+```bash
 cd webapp
 pip install -r requirements.txt
 ```
 
-Open `.env` in Notepad and fill in your two values:
+Copy `.env.example` to `.env` (if not already present) and set two
+values:
 
 ```
 SECRET_KEY=<a random long string>
-TEAM_PASSWORD=<a password you'll share with your teammate>
+TEAM_PASSWORD=<a password to share with your team>
 ```
 
-Generate a good `SECRET_KEY` with:
-```
+Generate a secure `SECRET_KEY` with:
+
+```bash
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-Then just run:
-```
+Start the app:
+
+```bash
 python app.py
 ```
 
-The app reads `.env` automatically now, so there's nothing to type in
-PowerShell before this — no `$env:` lines needed.
+Open **http://127.0.0.1:5000**, log in with any display name and the
+team password, and generate a document. `.env` is loaded automatically
+on startup — no environment variables need to be set manually in the
+shell.
 
-Open **http://127.0.0.1:5000** — log in with any name + the team
-password, fill the form, and you'll get a download link. Everything you
-generate also shows up on the **History** page.
+On first run this creates:
+- `instance/handovers.db` — a local SQLite database of generated documents
+- `generated/` — the generated `.docx` files, named
+  `<Name> - <Document type> - <Date>.docx` (e.g.
+  `Yasmin Mohamed - Laptop handover - 2026-09-10.docx`); if the same
+  person generates the same document type again on the same day, `(2)`,
+  `(3)`, etc. is appended instead of overwriting the earlier file
 
-This creates a local `instance/handovers.db` (SQLite database) and saves
-generated files in `generated/`, named
-`<Name> - <Document type> - <Date>.docx` (e.g.
-`Yasmin Mohamed - Laptop Handover - 2026-09-10.docx`) so the folder is
-browsable on its own, not just through the site - if the same person
-generates the same document type again on the same day, a `(2)`, `(3)`,
-... is appended instead of overwriting the earlier one. Both `instance/`
-and `generated/` are ignored by git (see `.gitignore`) so they don't get
-bundled up if you put this in a repo.
+Both directories are excluded from version control (see `.gitignore`).
 
-## Deploying it publicly
+## Configuration
 
-You need to pick a hosting platform and create an account there yourself
-— I can't do that part for you, but here's the easiest path with
-**Render** (free tier available, gives you HTTPS automatically):
+| Variable        | Required | Description                                            |
+|------------------|----------|----------------------------------------------------------|
+| `SECRET_KEY`      | Yes      | Signs Flask session cookies. Any long random string.       |
+| `TEAM_PASSWORD`   | Yes      | Shared password required to log in.                        |
+| `DATABASE_URL`    | No       | Overrides the default SQLite database (e.g. a Postgres connection string) with no code changes required. |
+| `PORT`            | No       | Port to listen on when run directly with `python app.py` (default `5000`). |
+| `FLASK_DEBUG`      | No       | Set to `0` to disable Flask's debug/auto-reload mode.      |
 
-1. Put this `webapp` folder in its own GitHub repository (private
-   repository — don't make it public, since `doc_templates/` contains
-   your company's document layouts).
-2. Go to [render.com](https://render.com), sign up, and click
-   **New → Web Service**, then connect that GitHub repo.
-3. Render will detect it's a Python app. Set:
-   - **Build command:** `pip install -r requirements.txt`
-   - **Start command:** `gunicorn app:app`
-4. Under **Environment**, add the environment variables:
-   - `SECRET_KEY` = (a random value, see above)
-   - `TEAM_PASSWORD` = (your team's password)
-5. Deploy. Render gives you a URL like
-   `https://stm-handover.onrender.com` — that's what you share with your
-   teammate.
+The app refuses to start with the placeholder `TEAM_PASSWORD` value —
+it must be set before running.
 
-**Important limitation on Render's free tier:** its filesystem is
-*ephemeral* — the SQLite database and generated files can be wiped
-whenever the service restarts or redeploys (this happens on the free
-tier after periods of inactivity). That's fine for trying it out, but if
-you want the history to reliably persist long-term, either:
-  - upgrade to a Render paid plan and attach a **persistent disk**, or
-  - use a proper database instead of SQLite — Render's free **Postgres**
-    tier works well; set the `DATABASE_URL` environment variable to its
-    connection string and the app will use it automatically (no code
-    changes needed).
+## Project structure
 
-**Railway** and **PythonAnywhere** are two other easy options if you'd
-rather not use Render — the steps are very similar (connect a repo or
-upload the folder, set the same two environment variables, point the
-start command at `gunicorn app:app`).
+```
+app.py                  Flask application: routes, authentication, database
+fill_logic.py            Document-filling engine and the TEMPLATES registry
+                         (one fill function per document type, plus the
+                         field list each type's form is generated from)
+doc_templates/            One placeholder Word template per document type:
+                             Laptop Handover Template.docx
+                             Laptop Replacement Template.docx
+                             Keyboard and Mouse Handover Template.docx
+                             Mouse Receipt Template.docx
+                             Screen Handover Template.docx
+                             Router Handover Template.docx
+                             Headset Handover Template.docx
+                             Printer Handover Template.docx
+                             Flash Drive Handover Template.docx
+                             Hard Disk Handover Template.docx
+templates/               HTML pages (login, picker, form, done, history)
+static/style.css          Stylesheet
+static/stm-logo.png        Logo, used in the header and favicon
+requirements.txt          Python dependencies
+Procfile                  Start command for hosting platforms (gunicorn)
+.env                       Local secrets (not committed to version control)
+.env.example                Blank reference copy of .env, safe to commit
+```
 
-## Giving your teammate access
+## Features
 
-Once it's deployed, just share:
-1. The URL Render (or whichever host) gives you.
-2. The `TEAM_PASSWORD` you set.
+### Document generation
 
-They type in their own name when logging in (so the history shows who
-generated each document) and the shared password.
+Each document type has its own form, generated from its field list in
+`fill_logic.py`. Required fields are validated server-side; mobile
+number and National ID fields are additionally checked against a
+regular expression (11-digit Egyptian mobile number, 14-digit national
+ID) before a document is generated, with the specific problem shown
+inline if a value doesn't match.
 
-## Deleting history entries
+### History
 
-Every row on the History page has a **Delete** button. It asks for
-confirmation first, and then it's permanent — it removes both the
-database record and the generated `.docx` file, with no way to undo it
-from the site. Anyone logged in (same shared team password as
-everywhere else) can delete any entry, not just their own — matching how
-the rest of the site already works today. If you'd rather restrict
-deleting to whoever created the entry, or add a "recover" option, that's
-a small change - just ask.
+Every generated document is recorded with the submitting user's name,
+department, position, national ID (masked to the last 4 digits in list
+views), document type, and the date and time it was generated. The
+History page supports:
 
-## If you want to add more people later without sharing one password
+- **Search** — matches name, department, or position
+- **Filters** — by document type, and by a from/to date range (based on
+  generation date)
+- **Pagination** — 50 records per page
+- **Print** — a print-friendly view of the current filtered results,
+  with navigation and controls hidden
+- **Export to Excel** — downloads the current filtered results as an
+  `.xlsx` file (national ID masked the same way as on screen)
+- **Delete** — permanently removes a record and its generated `.docx`
+  file, after a confirmation prompt. Any logged-in user can delete any
+  record.
 
-Right now everyone shares one team password. If down the line you want
-individual logins (so people can't see each other's password, or so you
-can revoke one person's access without changing it for everyone), that's
-a straightforward upgrade to the login system — just ask and I can add
-it.
+Search, filters, and pagination are reflected in the URL, so a filtered
+view can be bookmarked or shared.
+
+## Deployment
+
+The application is a standard Flask app and can be deployed to any
+platform that runs Python (Render, Railway, PythonAnywhere, an internal
+server, etc.). Example using **Render**:
+
+1. Push this folder to its own **private** GitHub repository —
+   `doc_templates/` contains STM's internal document layouts and should
+   not be made public.
+2. On [render.com](https://render.com), create a **New → Web Service**
+   and connect the repository.
+3. Set the build and start commands:
+   - Build command: `pip install -r requirements.txt`
+   - Start command: `gunicorn app:app`
+4. Set the environment variables `SECRET_KEY` and `TEAM_PASSWORD` (see
+   [Configuration](#configuration)).
+5. Deploy. Render provides a URL (e.g.
+   `https://stm-handover.onrender.com`) to share with the team, along
+   with the `TEAM_PASSWORD`.
+
+**Note on free hosting tiers:** platforms like Render's free tier use an
+*ephemeral* filesystem — the SQLite database and generated files can be
+lost on restart or redeploy. For reliable long-term history, either:
+
+- attach a persistent disk (available on paid plans), or
+- point `DATABASE_URL` at a managed database (e.g. Render's free
+  Postgres tier) — no code changes required.
+
+Railway and PythonAnywhere follow a similar process: connect the
+repository, set the two required environment variables, and point the
+start command at `gunicorn app:app`.
+
+## Security notes
+
+This application collects national ID numbers and other personal
+employee data. Before deploying it somewhere reachable outside STM's
+internal network, review the following:
+
+- **Authentication** is a single shared password for the whole team —
+  it gates every page, but does not distinguish between individual
+  users beyond the display name they type at login.
+- **National IDs are masked** in list views (last 4 digits only). The
+  full number is still present in the generated `.docx` file and
+  briefly on the confirmation page immediately after generation, since
+  it is required in the document itself.
+- **Change `SECRET_KEY` and `TEAM_PASSWORD`** from any placeholder
+  values before deploying.
+- Consider checking with STM's IT/security function before hosting real
+  employee national IDs anywhere reachable from outside the office
+  network, even behind a password. At minimum, use a host that provides
+  HTTPS by default, and do not share the URL or password outside the
+  team.
+- If access is only needed from the office, hosting on an internal
+  server reachable only over the company network/VPN removes the public
+  exposure entirely.
+
+## Adding a new document type
+
+1. Obtain a real, filled-in example of the new document.
+2. Sanitize it into a placeholder template (`FILL_*` placeholders
+   replacing real values) and add it to `doc_templates/`.
+3. Write a corresponding fill function in `fill_logic.py`.
+4. Add an entry to the `TEMPLATES` dict describing the document's label,
+   template file, fill function, and field list.
+
+No other file needs to change — the home page and the document's form
+are generated from the registry.
+
+## Possible future enhancements
+
+- Individual per-user logins in place of the single shared password
+- Rate limiting, CSRF tokens, and other production-hardening measures
+- Restricting who can delete a given history entry to its creator

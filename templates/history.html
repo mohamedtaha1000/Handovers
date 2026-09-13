@@ -1,17 +1,54 @@
 {% extends "base.html" %}
 {% block title %}History{% endblock %}
 {% block content %}
-<div class="page-head">
+<div class="page-head no-print">
   <h1>Handover history</h1>
-  <p class="lead">Every document generated from this site</p>
+  <p class="lead">Every document generated from this site{% if total %} &mdash; {{ total }} total{% endif %}</p>
 </div>
 
 <div class="card wide">
-  <form method="get" class="search">
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
-    <input type="text" name="q" value="{{ q }}" placeholder="Search name / department / position">
-    <button type="submit">Search</button>
+  <form method="get" class="search filters no-print">
+    <div class="filters-row">
+      <div class="filter-field filter-search">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+        <input type="text" name="q" value="{{ q }}" placeholder="Search name / department / position">
+      </div>
+      <div class="filter-field">
+        <label>Type</label>
+        <select name="type">
+          <option value="">All types</option>
+          {% for tid, spec in templates.items() %}
+          <option value="{{ tid }}" {% if tid == type_filter %}selected{% endif %}>{{ spec.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="filter-field">
+        <label>From</label>
+        <input type="date" name="from" value="{{ date_from }}">
+      </div>
+      <div class="filter-field">
+        <label>To</label>
+        <input type="date" name="to" value="{{ date_to }}">
+      </div>
+      <div class="filter-actions">
+        <button type="submit">Apply</button>
+        {% if q or type_filter or date_from or date_to %}
+        <a href="{{ url_for('history') }}" class="button-secondary">Clear</a>
+        {% endif %}
+      </div>
+    </div>
   </form>
+
+  <div class="history-toolbar no-print">
+    <a class="button-secondary" href="{{ url_for('export_history', q=q, type=type_filter, **{'from': date_from, 'to': date_to}) }}">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+      Export to Excel
+    </a>
+    <button type="button" class="button-secondary" onclick="window.print()">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z"/></svg>
+      Print
+    </button>
+  </div>
 
   {% if records %}
   <div class="table-wrap">
@@ -25,7 +62,7 @@
           <th>National ID</th>
           <th>Date</th>
           <th>By</th>
-          <th></th>
+          <th class="no-print"></th>
         </tr>
       </thead>
       <tbody>
@@ -38,13 +75,17 @@
           <td class="mono">{{ r.govid|mask_id }}</td>
           <td>{{ r.handover_date }}</td>
           <td class="muted">{{ r.created_by }}</td>
-          <td class="actions">
+          <td class="actions no-print">
             <a class="download-link" href="{{ url_for('get_file', record_id=r.id) }}">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
               Download
             </a>
             <form method="post" action="{{ url_for('delete_history', record_id=r.id) }}" class="delete-form" onsubmit="return confirm('Permanently delete the record for {{ r.name }}? This also deletes the generated .docx file. This cannot be undone.');">
               <input type="hidden" name="q" value="{{ q }}">
+              <input type="hidden" name="type" value="{{ type_filter }}">
+              <input type="hidden" name="from" value="{{ date_from }}">
+              <input type="hidden" name="to" value="{{ date_to }}">
+              <input type="hidden" name="page" value="{{ page }}">
               <button type="submit" class="delete-link">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6h16Z"/></svg>
                 Delete
@@ -56,11 +97,24 @@
       </tbody>
     </table>
   </div>
+
+  {% if pages > 1 %}
+  <div class="pagination no-print">
+    {% set base_args = {'q': q, 'type': type_filter, 'from': date_from, 'to': date_to} %}
+    {% if page > 1 %}
+    <a class="button-secondary" href="{{ url_for('history', page=page-1, **base_args) }}">&larr; Previous</a>
+    {% endif %}
+    <span class="page-info">Page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}
+    <a class="button-secondary" href="{{ url_for('history', page=page+1, **base_args) }}">Next &rarr;</a>
+    {% endif %}
+  </div>
+  {% endif %}
   {% else %}
   <div class="empty-state">
     <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
-    <p>{% if q %}No matching results{% else %}No documents yet{% endif %}</p>
-    {% if not q %}<a href="{{ url_for('index') }}" class="button">+ Create the first one</a>{% endif %}
+    <p>{% if q or type_filter or date_from or date_to %}No matching results{% else %}No documents yet{% endif %}</p>
+    {% if not (q or type_filter or date_from or date_to) %}<a href="{{ url_for('index') }}" class="button">+ Create the first one</a>{% endif %}
   </div>
   {% endif %}
 </div>

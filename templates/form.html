@@ -26,7 +26,9 @@
         <input name="{{ f.key }}" {% if f.required %}required{% endif %} value="{{ data.get(f.key,'') }}"
                {% if f.inputmode %}inputmode="{{ f.inputmode }}"{% endif %}
                {% if f.maxlength %}maxlength="{{ f.maxlength }}"{% endif %}
+               {% if f.pattern %}pattern="{{ f.pattern }}" title="{{ f.pattern_msg or '' }}"{% endif %}
                placeholder="{{ f.placeholder or '' }}">
+        {% if f.pattern_msg %}<p class="field-hint">{{ f.pattern_msg }}</p>{% endif %}
         {% endif %}
       </div>
       {% endfor %}
