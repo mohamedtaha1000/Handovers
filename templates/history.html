@@ -8,9 +8,11 @@
     <p class="lead">{{ grand_total }} document{{ '' if grand_total == 1 else 's' }} generated from this site</p>
   </div>
   <div class="head-actions">
-    <a class="button-secondary" href="{{ url_for('export_history', q=q, type=type_filter, **{'from': date_from, 'to': date_to}) }}">
-      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
-      Export
+    {# The register keeps itself up to date; this is for reading it from
+       a machine that is not the one the app runs on. #}
+    <a class="button-secondary" href="{{ url_for('download_register') }}">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 9v12"/></svg>
+      Laptop register
     </a>
     <button type="button" class="button-secondary no-print" onclick="window.print()">
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z"/></svg>

@@ -102,6 +102,7 @@ Both directories are excluded from version control (see `.gitignore`).
 | `HANDOVER_NOTIFY_NAME` | No   | How that email greets its recipient (default `Eng. Hegazy`). |
 | `HANDOVER_EMS_TO`      | No   | Who the leaver's EMS deactivation email is addressed to. |
 | `HANDOVER_LEAVER_TO`   | No   | Who the leaver's resignation email is addressed to. |
+| `HANDOVER_REGISTER_PATH` | No | Where the laptop register `.xlsx` is written (default `laptop_register.xlsx` beside the app). Rebuilt automatically on every change. |
 
 The app refuses to start with the placeholder `TEAM_PASSWORD` value —
 it must be set before running.

@@ -45,6 +45,7 @@ from fill_logic import (
 )
 import notify_email
 import leaver_email
+import asset_register
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")  # reads SECRET_KEY / TEAM_PASSWORD from .env if present
@@ -76,6 +77,12 @@ NOTIFY_NAME = os.environ.get("HANDOVER_NOTIFY_NAME", "Eng. Hegazy").strip()
 EMS_TO = os.environ.get("HANDOVER_EMS_TO", "").strip()
 LEAVER_TO = os.environ.get("HANDOVER_LEAVER_TO", "").strip()
 LEAVER_RECIPIENTS = {"ems": EMS_TO, "resignation": LEAVER_TO}
+
+# The laptop register. Beside the app by default, so on a machine where
+# the folder is synced it simply appears - no download step, no second
+# copy to go stale. Somewhere else via HANDOVER_REGISTER_PATH.
+REGISTER_PATH = Path(os.environ.get(
+    "HANDOVER_REGISTER_PATH", str(BASE_DIR / "laptop_register.xlsx")))
 
 TEAM_PASSWORD = os.environ.get("TEAM_PASSWORD") or "changeme"
 if TEAM_PASSWORD == "changeme":
@@ -123,6 +130,20 @@ class Handover(db.Model):
     def template_label(self):
         spec = TEMPLATES.get(self.template_id)
         return spec["label"] if spec else self.template_id
+
+
+class Departure(db.Model):
+    """Someone who has left. Kept per person rather than per document:
+    they hand back everything at once, and the register works out which
+    rows that touches."""
+    id = db.Column(db.Integer, primary_key=True)
+    # employee_identity(): the employee code where there is one, the
+    # national ID behind it, the name as a last resort.
+    identity = db.Column(db.String(160), unique=True, index=True)
+    name = db.Column(db.String(200))
+    left_on = db.Column(db.String(20))
+    recorded_by = db.Column(db.String(120))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 with app.app_context():
@@ -611,6 +632,7 @@ def new_document(template_id):
         )
         db.session.add(record)
         db.session.commit()
+        register_updated()
 
         return redirect(url_for("done", record_id=record.id))
 
@@ -685,6 +707,7 @@ def edit_document(record_id):
         record.updated_by = session.get("display_name", "-")
         record.updated_at = datetime.utcnow()
         db.session.commit()
+        register_updated()
 
         flash(f"Saved. The document for {record.name} has been generated again.", "success")
         return redirect(url_for("done", record_id=record.id))
@@ -804,6 +827,7 @@ def new_batch():
             db.session.flush()
             created.append(record.id)
         db.session.commit()
+        register_updated()
         return redirect(url_for("done_batch", ids=",".join(str(i) for i in created)))
 
     prefill = {}
@@ -1042,53 +1066,78 @@ def _filtered_history_query():
     return query
 
 
-@app.route("/history/export.xlsx")
+# ----------------------------------------------------------------------
+# The laptop register
+#
+# A spreadsheet rebuilt from the database whenever anything changes, so
+# it can never drift from the records behind it. See asset_register.py
+# for the shape of it.
+# ----------------------------------------------------------------------
+
+def register_rows():
+    records = Handover.query.all()
+    departures = {d.identity: d for d in Departure.query.all()}
+    return asset_register.build_rows(records, employee_identity, departures)
+
+
+def refresh_register():
+    """Rebuild the sheet. Returns None on success, or a sentence saying
+    why not.
+
+    This is called from the middle of generating a document, so it must
+    never raise: a register that could not be written is a nuisance, and
+    losing the document that was just signed is not. The usual cause on
+    Windows is the file being open in Excel, which locks it - worth
+    saying plainly rather than reporting as an error.
+    """
+    try:
+        asset_register.write_workbook(register_rows(), REGISTER_PATH)
+        return None
+    except PermissionError:
+        return (f"The laptop register ({REGISTER_PATH.name}) is open in Excel, "
+                f"so it could not be updated. Close it and the next document "
+                f"will bring it up to date.")
+    except Exception as problem:            # noqa: BLE001 - never block the document
+        app.logger.exception("register rebuild failed")
+        return f"The laptop register could not be updated: {problem}"
+
+
+def register_updated():
+    """Rebuild, and flash only if something went wrong. Success is
+    silent: it happens on every single document and a message saying so
+    every time would be noise the person learns to ignore."""
+    problem = refresh_register()
+    if problem:
+        flash(problem, "info")
+
+
+@app.route("/register.xlsx")
 @login_required
-def export_history():
-    from openpyxl import Workbook
-    from openpyxl.styles import Font
-    from io import BytesIO
-
-    records = _filtered_history_query().all()
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Handover history"
-
-    headers = ["Name", "Document type", "Department", "Position", "National ID",
-               "Handover date", "Generated by", "Generated at",
-               "Last edited by", "Last edited at"]
-    ws.append(headers)
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
-
-    for r in records:
-        ws.append([
-            # National ID stays masked here too, same as the on-screen
-            # history table - exporting the full number would undo the
-            # point of masking it there in the first place.
-            r.name, r.template_label, r.department, r.role, mask_id(r.govid),
-            r.handover_date, r.created_by,
-            r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "",
-            r.updated_by or "",
-            r.updated_at.strftime("%Y-%m-%d %H:%M") if r.updated_at else "",
-        ])
-
-    # Reasonable column widths rather than Excel's cramped default.
-    widths = [22, 26, 18, 20, 16, 14, 16, 18, 16, 18]
-    for i, w in enumerate(widths, start=1):
-        ws.column_dimensions[chr(64 + i)].width = w
-
-    buf = BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-
-    filename = f"handover-history-{date.today().isoformat()}.xlsx"
+def download_register():
+    """The file itself. It lives beside the app, but the app may be on a
+    different machine from whoever wants to read it."""
     from flask import send_file
+    if not REGISTER_PATH.exists():
+        problem = refresh_register()
+        if problem:
+            flash(problem, "error")
+            return redirect(url_for("history"))
     return send_file(
-        buf, as_attachment=True, download_name=filename,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+        REGISTER_PATH, as_attachment=True,
+        download_name=f"laptop-register-{date.today().isoformat()}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.route("/register/rebuild", methods=["POST"])
+@login_required
+def rebuild_register():
+    problem = refresh_register()
+    if problem:
+        flash(problem, "error")
+    else:
+        flash(f"Laptop register rebuilt — {len(register_rows())} assignments.",
+              "success")
+    return redirect(request.form.get("next") or url_for("history"))
 
 
 # ----------------------------------------------------------------------
@@ -1190,6 +1239,118 @@ def leaver_links(person):
     return links
 
 
+def matching_laptops(name="", serial="", code=""):
+    """The laptop rows the register holds for whoever is typed into the
+    leaver page.
+
+    That page is free text - the person may never have had a document
+    generated - so this matches on what it has: the employee code first
+    because it is the real identifier, then an exact serial, then the
+    name. Nothing fuzzy: marking the wrong person as gone is worse than
+    finding nobody and saying so.
+    """
+    name, serial, code = name.strip().lower(), serial.strip().lower(), code.strip().lower()
+    if not (name or serial or code):
+        return []
+    rows = register_rows()
+    matched = []
+    for row in rows:
+        if code and row["code"].strip().lower() == code:
+            matched.append(row)
+        elif serial and row["serial"].strip().lower() == serial:
+            matched.append(row)
+        elif name and row["name"].strip().lower() == name:
+            matched.append(row)
+    return matched
+
+
+@app.route("/api/holdings")
+@login_required
+def api_holdings():
+    """What the leaver page shows under its two email buttons, refreshed
+    as the boxes are typed."""
+    rows = matching_laptops(request.args.get("name", ""),
+                            request.args.get("serial", ""),
+                            request.args.get("code", ""))
+    return {
+        "laptops": [{"model": r["model"], "serial": r["serial"],
+                     "status": r["status"], "assigned_on": asset_register.show_date(r["date"]),
+                     "assigned_by": r["by"], "name": r["name"]}
+                    for r in rows],
+        "open": sum(1 for r in rows if r["status"] == asset_register.HELD),
+    }
+
+
+@app.route("/leaver/left", methods=["POST"])
+@login_required
+def mark_left():
+    """Record that someone has gone, and rebuild the register around it.
+
+    Stored against the same identity the rest of the app uses, so it
+    follows the person rather than one document: everything they were
+    ever issued flips to Left together.
+    """
+    # The page's own button asks for JSON: it is opening Outlook twice in
+    # the same click and must not navigate away to a redirect. The plain
+    # form POST (no JavaScript) still gets the redirect and the flash.
+    wants_json = request.form.get("format") == "json"
+
+    # The page greys its buttons out until all five details are there.
+    # That is a courtesy, not a guard: anything a browser enforces can be
+    # turned off in the developer tools, and this request writes to the
+    # register. So the same rule is checked here, where it cannot be
+    # edited away, and the request is refused rather than half-applied.
+    typed = {f["key"]: request.form.get(f["key"], "").strip()
+             for f in leaver_email.FORM_FIELDS}
+    missing = [f["label"] for f in leaver_email.FORM_FIELDS if not typed[f["key"]]]
+    if missing:
+        message = ("Nothing was changed: " + ", ".join(missing)
+                   + (" is" if len(missing) == 1 else " are")
+                   + " still empty, and all five are needed before anyone can "
+                     "be marked as left.")
+        if wants_json:
+            return {"marked": 0, "message": message, "incomplete": missing}, 400
+        flash(message, "error")
+        return redirect(url_for("leaver", **request.form.to_dict(flat=True)))
+
+    name, serial = typed["name"], typed["serial"]
+    code = request.form.get("code", "").strip()
+    rows = matching_laptops(name, serial, code)
+    if not rows:
+        message = ("Nothing on file matches those details, so there was "
+                   "nothing to mark in the register.")
+        if wants_json:
+            return {"marked": 0, "message": message}
+        flash(message + " The two emails still work.", "info")
+        return redirect(url_for("leaver", **request.form.to_dict(flat=True)))
+
+    identities = {r["identity"] for r in rows}
+    today = date.today()
+    left_on = f"{today.day}/{today.month}/{today.year}"
+    for identity in identities:
+        existing = Departure.query.filter_by(identity=identity).first()
+        if existing is None:
+            db.session.add(Departure(
+                identity=identity, name=rows[0]["name"], left_on=left_on,
+                recorded_by=session.get("display_name", "-")))
+        else:
+            existing.left_on = left_on
+            existing.recorded_by = session.get("display_name", "-")
+    db.session.commit()
+
+    problem = refresh_register()
+    machines = ", ".join(f"{r['model']} ({r['serial']})" for r in rows if r["serial"])
+    message = (f"{rows[0]['name']} marked as left. "
+               f"{len(rows)} laptop{'' if len(rows) == 1 else 's'} in the register "
+               f"updated{': ' + machines if machines else ''}.")
+    if wants_json:
+        return {"marked": len(rows), "message": message, "problem": problem or ""}
+    if problem:
+        flash(problem, "info")
+    flash(message, "success")
+    return redirect(url_for("leaver", **request.form.to_dict(flat=True)))
+
+
 @app.route("/leaver")
 @login_required
 def leaver():
@@ -1198,6 +1359,7 @@ def leaver():
     return render_template(
         "leaver.html",
         fields=leaver_email.FORM_FIELDS, typed=typed,
+        holdings=matching_laptops(typed.get("name", ""), typed.get("serial", "")),
         messages=leaver_email.MESSAGES, recipients=LEAVER_RECIPIENTS,
         links=leaver_links(typed),
         # The same two links with a token wherever a value goes, for the
@@ -1220,6 +1382,7 @@ def delete_history(record_id):
     name = record.name
     db.session.delete(record)
     db.session.commit()
+    register_updated()
     flash(f"Deleted the record for {name}, and its generated file.", "success")
     # Preserve whatever search/filter/page the delete was performed from,
     # so deleting a row from page 3 of a filtered view doesn't bounce the
