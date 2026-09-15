@@ -1,0 +1,24 @@
+{#
+  The register's view of whoever is typed into the leaver page. Rendered
+  here for the no-JavaScript case and re-rendered in the browser as the
+  boxes change - the two must agree, so keep them in step.
+#}
+{% if holdings %}
+<ul class="holding-list">
+  {% for h in holdings %}
+  <li>
+    <b>{{ h.model or 'Laptop' }}</b>
+    <span>{{ h.serial }}</span>
+    <i>{{ h.status }}{% if h.by %} · assigned by {{ h.by }}{% endif %}{% if h.date %} on {{ h.date }}{% endif %}</i>
+  </li>
+  {% endfor %}
+</ul>
+<form method="post" action="{{ url_for('mark_left') }}" class="form-actions">
+  {% for f in fields %}
+  <input type="hidden" name="{{ f.key }}" value="{{ typed[f.key] }}">
+  {% endfor %}
+  <button type="submit" class="button-secondary">Mark as left</button>
+</form>
+{% else %}
+<p class="leaver-none">Nothing on file for this person &mdash; the two emails above still work.</p>
+{% endif %}

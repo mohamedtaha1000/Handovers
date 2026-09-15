@@ -48,6 +48,20 @@
 
 <div class="card section">
   {{ ui.section_head(2, 'Send them', 'Opens Outlook with everything written') }}
+  {#
+    One button for the whole errand: both drafts open and the register is
+    updated. It only appears when the page can script it, because
+    without JavaScript there is no way to do three things on one click -
+    the two links and the register's own button below still work then.
+  #}
+  <div class="do-it" id="do-it" hidden>
+    <button type="button" class="button full" id="do-both">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M4 7l8 6 8-6"/></svg>
+      Open both emails &amp; mark as left
+    </button>
+    <p class="do-it-note" id="do-it-note" role="status"></p>
+  </div>
+  <p class="or-line" id="or-line" hidden>or open them one at a time</p>
   <div class="leaver-actions">
     {% for m in messages %}
     <a class="leaver-button" href="{{ links[m.key] }}"
@@ -63,6 +77,18 @@
     {% endfor %}
   </div>
   <p class="leaver-note" id="leaver-blanks" hidden></p>
+</div>
+
+{#
+  Marking someone as left is deliberately its own button, not something
+  that happens when an email is opened: you often open one just to see
+  what it says. It only appears once something on file matches.
+#}
+<div class="card section">
+  {{ ui.section_head(3, 'The laptop register', 'What they are holding') }}
+  <div id="holdings">
+    {% include "_holdings.html" %}
+  </div>
 </div>
 
 <script>
@@ -109,18 +135,168 @@
         el.href = url;
       });
 
+      /* Nothing sends until all five are there. An email that names a
+         person but leaves their serial blank is worse than no email:
+         it reads as complete and quietly is not. */
+      setReady(empty.length === 0, empty);
+    }
+
+    /* The buttons, on or off together. The two single links are
+       <a> elements and cannot carry `disabled`, so they say so the way
+       assistive technology reads it and refuse the click themselves. */
+    function setReady(ready, empty) {
+      if (both) both.disabled = !ready;
+      Array.prototype.forEach.call(links, function (el) {
+        el.classList.toggle('is-disabled', !ready);
+        el.setAttribute('aria-disabled', ready ? 'false' : 'true');
+        if (ready) el.removeAttribute('tabindex');
+        else el.setAttribute('tabindex', '-1');
+      });
       if (blanks) {
-        blanks.hidden = empty.length === 0;
-        blanks.textContent = empty.length
-          ? 'Still empty: ' + empty.join(', ') + ' — those lines will send blank.'
-          : '';
+        blanks.hidden = ready;
+        blanks.textContent = ready ? ''
+          : 'Waiting on ' + (empty || []).join(', ')
+            + ' — the buttons turn on once all five are filled in.';
       }
     }
 
+    /* What the register holds for whoever is typed in, refreshed as the
+       name or serial changes. A GET reload would do the same thing, but
+       this page deliberately never reloads. */
+    var holdings = document.getElementById('holdings');
+    var pending = null;
+    function lookUpHoldings() {
+      if (!holdings) return;
+      var params = new URLSearchParams({
+        name: form.querySelector('[name="name"]').value.trim(),
+        serial: form.querySelector('[name="serial"]').value.trim()
+      });
+      clearTimeout(pending);
+      pending = setTimeout(function () {
+        fetch('{{ url_for("api_holdings") }}?' + params, { credentials: 'same-origin' })
+          .then(function (r) { return r.ok ? r.json() : { laptops: [] }; })
+          .then(render)
+          .catch(function () { /* offline: leave whatever is on screen */ });
+      }, 250);
+    }
+
+    function render(data) {
+      var list = data.laptops || [];
+      if (!list.length) {
+        holdings.innerHTML = '<p class="leaver-none">Nothing on file for this person '
+          + '— the two emails above still work.</p>';
+        return;
+      }
+      var rows = list.map(function (l) {
+        return '<li><b></b><span></span><i></i></li>';
+      }).join('');
+      holdings.innerHTML = '<ul class="holding-list">' + rows + '</ul>';
+      /* textContent, not string building: a model name is someone's
+         typing and must never be read as markup. */
+      holdings.querySelectorAll('.holding-list li').forEach(function (li, i) {
+        li.querySelector('b').textContent = list[i].model || 'Laptop';
+        li.querySelector('span').textContent = list[i].serial || '';
+        li.querySelector('i').textContent = list[i].status
+          + (list[i].assigned_by ? ' · assigned by ' + list[i].assigned_by : '')
+          + (list[i].assigned_on ? ' on ' + list[i].assigned_on : '');
+      });
+    }
+
+    /* The one-click errand: mark them as left, then open both drafts.
+     *
+     * Order matters. The register is updated FIRST and its answer waited
+     * for, because that is the part that must not be lost - handing the
+     * browser two external-protocol links is the unreliable half. Both
+     * openings happen inside the same click: Chrome keeps a click's
+     * "user activation" alive for about five seconds, and a second
+     * mailto fired outside that window is silently dropped. The gap
+     * between them is what stops Outlook from swallowing the second one
+     * while it is still starting up.
+     *
+     * If Outlook only opens once, the two links below still work: they
+     * are left on the page on purpose rather than hidden behind this.
+     */
+    var both = document.getElementById('do-both');
+    var note = document.getElementById('do-it-note');
+    var wrap = document.getElementById('do-it');
+    var orLine = document.getElementById('or-line');
+
+    function open_mailto(url) {
+      var a = document.createElement('a');
+      a.href = url;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { a.remove(); }, 0);
+    }
+
+    function say(text, kind) {
+      if (!note) return;
+      note.textContent = text;
+      note.className = 'do-it-note' + (kind ? ' ' + kind : '');
+    }
+
+    if (both) {
+      wrap.hidden = false;
+      if (orLine) orLine.hidden = false;
+      both.addEventListener('click', function () {
+        if (both.disabled) return;
+        var urls = Array.prototype.map.call(links, function (el) { return el.href; });
+        var body = new URLSearchParams({ format: 'json' });
+        KEYS.forEach(function (key) {
+          var box = form.querySelector('[name="' + key + '"]');
+          body.append(key, box ? box.value.trim() : '');
+        });
+        both.disabled = true;
+        say('Opening Outlook…');
+        fetch('{{ url_for("mark_left") }}', {
+          method: 'POST', credentials: 'same-origin', body: body,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        })
+          /* Read the body whatever the status: a refusal carries the
+             reason, and dropping it would leave the button looking
+             broken rather than answered. */
+          .then(function (r) { return r.json().catch(function () { return {}; }); })
+          .catch(function () { return { error: 'The register could not be reached.' }; })
+          .then(function (result) {
+            if (result.incomplete) {
+              /* The server disagrees that this is ready to send - the
+                 page was edited, or the boxes were emptied between the
+                 click and the request. Nothing opens. */
+              refresh();
+              say(result.message, 'bad');
+              return;
+            }
+            open_mailto(urls[0]);
+            setTimeout(function () { open_mailto(urls[1]); }, 1200);
+            setTimeout(function () {
+              refresh();
+              say((result.message || result.error || '')
+                  + ' Both drafts should be open in Outlook — '
+                  + 'if only one appeared, use the links below for the other.',
+                  result.marked ? 'good' : '');
+              lookUpHoldings();
+            }, 1400);
+          });
+      });
+    }
+
+    Array.prototype.forEach.call(links, function (el) {
+      el.addEventListener('click', function (e) {
+        if (el.classList.contains('is-disabled')) e.preventDefault();
+      });
+    });
+
+    form.addEventListener('input', lookUpHoldings);
     form.addEventListener('input', refresh);
     /* Submitting is what makes the page work without JavaScript. With it
        the links are already current, so the button has nothing to do. */
     if (submit) submit.hidden = true;
+    /* The register's own "Mark as left" is the no-JavaScript path. With
+       scripting, the button above already does it as part of sending. */
+    var standalone = holdings && holdings.querySelector('form');
+    if (standalone) standalone.hidden = true;
+    lookUpHoldings();
     form.addEventListener('submit', function (e) { e.preventDefault(); refresh(); });
     refresh();
   })();
