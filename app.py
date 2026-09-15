@@ -856,6 +856,10 @@ def done_batch():
         return redirect(url_for("history"))
     return render_template("done_batch.html", records=records,
                            ids=request.args.get("ids", ""),
+                           # What each document actually handed over, so
+                           # the list reads as equipment rather than as
+                           # ten repetitions of the same date.
+                           equipment={r.id: equipment_summary(r) for r in records},
                            mailto=mailto_link(records))
 
 

@@ -1,28 +1,34 @@
 {% extends "base.html" %}
-{% block title %}Login{% endblock %}
-{% block content %}
+{% block title %}Sign in{% endblock %}
+{% block shell %}
 <div class="login-wrap">
-  <img src="{{ url_for('static', filename='stm-logo.png') }}" alt="STM" class="login-logo">
-  <div class="card narrow">
-    <h1>Login</h1>
-    <p class="subtitle">Handover &amp; receipt documents</p>
-    {% if error %}
-    <p class="error">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
-      {{ error }}
-    </p>
-    {% endif %}
-    <form method="post">
-      <div class="field">
-        <label>Your name</label>
-        <input type="text" name="your_name" required autofocus placeholder="e.g. Mohamed Taha">
+  <div class="login-inner">
+    <div class="login-logo">
+      <img src="{{ url_for('static', filename='stm-wordmark.png') }}" alt="STM">
+      <span>Handover Documents</span>
+    </div>
+    <div class="card">
+      <h1>Sign in</h1>
+      <p class="subtitle">Shared team password. Your name goes on every document you generate.</p>
+      {% if error %}
+      <div class="flash error">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+        <p>{{ error }}</p>
       </div>
-      <div class="field">
-        <label>Team password</label>
-        <input type="password" name="password" required placeholder="••••••••">
-      </div>
-      <button type="submit" class="full">Log in</button>
-    </form>
+      {% endif %}
+      <form method="post">
+        <div class="field">
+          <label for="your_name">Your name</label>
+          <input id="your_name" type="text" name="your_name" required autofocus placeholder="Mohamed Taha">
+        </div>
+        <div class="field">
+          <label for="password">Team password</label>
+          <input id="password" type="password" name="password" required placeholder="••••••••">
+        </div>
+        <button type="submit" class="full">Log in</button>
+      </form>
+    </div>
+    <p class="login-note">STM internal tool · documents never leave the office network</p>
   </div>
 </div>
 {% endblock %}

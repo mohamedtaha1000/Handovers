@@ -1,43 +1,56 @@
 {% extends "base.html" %}
-{% block title %}New document{% endblock %}
+{% block title %}New handover{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1>What are you handing over?</h1>
+  <h1>New handover</h1>
   {% if employee %}
   <p class="lead">Another document for the same person &mdash; their details will be filled in for you</p>
   {% else %}
-  <p class="lead">Pick one, or tick several to make them all for the same person</p>
+  <p class="lead">Fills the official Word document and logs it automatically.</p>
   {% endif %}
 </div>
 
 {#
-  Each card is still a link, so the common case stays a single click. The
+  Each tile is still a link, so the common case stays a single click. The
   checkbox beside it opts into the combined form; the action bar only
   appears once something is ticked.
 #}
 <form method="post" action="{{ url_for('new_batch_start', employee=employee) }}" id="picker-form">
-
-  {% for group_name, members in groups %}
-  <div class="picker-section">
-    <div class="picker-group-label">{{ group_name }}</div>
-    <div class="picker-grid">
-      {% for tid, spec in members %}
-      <div class="picker-card" data-card>
-        <label class="picker-tick" title="Add {{ spec.label }} to a combined set">
-          <input type="checkbox" name="template_id" value="{{ tid }}">
-        </label>
-        <a class="picker-main" href="{{ url_for('new_document', template_id=tid, employee=employee) }}">
-          <span class="picker-text">
-            <span class="picker-label">{{ spec.label }}</span>
-            <span class="picker-label-ar">{{ spec.label_ar }}</span>
-          </span>
-          <svg class="picker-arrow" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
-        </a>
+  <div class="card">
+    <div class="picker-top">
+      <div class="search-box">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+        <input id="picker-search" type="search" autocomplete="off" placeholder="Search document types">
       </div>
-      {% endfor %}
+      <span>Tick several to make them all for the same person.</span>
     </div>
+
+    {% for group_name, members in groups %}
+    <div class="picker-section" data-group>
+      <div class="picker-group-label"><b>{{ group_name }}</b></div>
+      <div class="picker-grid">
+        {% for tid, spec in members %}
+        <div class="picker-card" data-card data-search="{{ spec.label|lower }} {{ spec.label_ar }} {{ group_name|lower }}">
+          <label class="picker-tick" title="Add {{ spec.label }} to a combined set">
+            <input type="checkbox" name="template_id" value="{{ tid }}">
+          </label>
+          <a class="picker-main" href="{{ url_for('new_document', template_id=tid, employee=employee) }}">
+            <span class="picker-icon">
+              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">{{ spec.icon|safe }}</svg>
+            </span>
+            <span class="picker-text">
+              <span class="picker-label">{{ spec.label }}</span>
+              <span class="picker-label-ar">{{ spec.label_ar }}</span>
+            </span>
+            <svg class="picker-arrow" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+          </a>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+    <p class="leaver-none" id="picker-empty" hidden>No document type matches that.</p>
   </div>
-  {% endfor %}
 
   <div class="action-bar" id="batch-bar" hidden>
     <div class="action-bar-text">
@@ -58,6 +71,7 @@
     var bar = document.getElementById('batch-bar');
     var count = document.getElementById('batch-n');
     var names = document.getElementById('batch-names');
+
     function refresh() {
       var ticked = Array.prototype.slice.call(
         form.querySelectorAll('input[name="template_id"]:checked'));
@@ -79,6 +93,28 @@
       });
       refresh();
     });
+
+    /* Ten types is just past the number you can scan at a glance, so the
+       box filters in place. A group with nothing left in it hides too,
+       otherwise its heading sits above an empty gap. */
+    var search = document.getElementById('picker-search');
+    var empty = document.getElementById('picker-empty');
+    search.addEventListener('input', function () {
+      var q = search.value.trim().toLowerCase();
+      var shown = 0;
+      form.querySelectorAll('[data-card]').forEach(function (card) {
+        var hit = !q || card.dataset.search.indexOf(q) !== -1;
+        card.hidden = !hit;
+        if (hit) shown++;
+      });
+      form.querySelectorAll('[data-group]').forEach(function (group) {
+        var any = Array.prototype.some.call(
+          group.querySelectorAll('[data-card]'), function (c) { return !c.hidden; });
+        group.hidden = !any;
+      });
+      empty.hidden = shown !== 0;
+    });
+
     refresh();
   })();
 </script>

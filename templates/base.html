@@ -8,36 +8,39 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
+{#
+  Every signed-in page is the same shell: a sticky bar, then the page.
+  Login replaces the whole shell rather than sitting inside it - it has
+  no navigation to offer and the design gives it the full window.
+#}
+{% block shell %}
   <header class="topbar no-print">
     <div class="topbar-inner">
-      <a class="brand" href="{{ url_for('index') if session.get('logged_in') else url_for('login') }}">
-        <img src="{{ url_for('static', filename='stm-logo.png') }}" alt="STM" class="brand-logo">
-        <span class="brand-text">Handover Documents</span>
+      <a class="brand" href="{{ url_for('index') }}">
+        <img src="{{ url_for('static', filename='stm-wordmark.png') }}" alt="STM" class="brand-logo">
+        <span class="brand-text">Handover</span>
       </a>
-      {% if session.get('logged_in') %}
       <nav>
-        <a href="{{ url_for('index') }}" class="{{ 'active' if request.endpoint == 'index' }}">
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 4v16m8-8H4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          New
+        <a href="{{ url_for('index') }}" class="{{ 'active' if request.endpoint in ('index', 'new_document', 'new_batch', 'edit_document') }}">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          New handover
         </a>
         <a href="{{ url_for('history') }}" class="{{ 'active' if request.endpoint == 'history' }}">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
           History
         </a>
         <a href="{{ url_for('leaver') }}" class="{{ 'active' if request.endpoint == 'leaver' }}">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
           Leaver
         </a>
-        <span class="nav-rule"></span>
-        <span class="who">
-          {# Initials rather than a generic silhouette: on a shared-login
-             tool, whose name is on the documents you generate matters. #}
-          <span class="who-badge">{{ session.get('display_name', '?')|initials }}</span>
-          <span class="who-name">{{ session.get('display_name') }}</span>
-        </span>
-        <a href="{{ url_for('logout') }}" class="logout">Logout</a>
       </nav>
-      {% endif %}
+      <span class="who">
+        {# Initials rather than a generic silhouette: on a shared-login
+           tool, whose name is on the documents you generate matters. #}
+        <span class="who-badge">{{ session.get('display_name', '?')|initials }}</span>
+        <span class="who-name">{{ session.get('display_name') }}</span>
+        <a href="{{ url_for('logout') }}" class="logout">Log out</a>
+      </span>
     </div>
   </header>
   <main class="container">
@@ -76,5 +79,6 @@
     {% endwith %}
     {% block content %}{% endblock %}
   </main>
+{% endblock %}
 </body>
 </html>

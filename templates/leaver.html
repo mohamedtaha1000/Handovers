@@ -1,94 +1,94 @@
 {% extends "base.html" %}
-{% import "_fields.html" as ui %}
 {% block title %}Employee leaving{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>Someone is leaving</h1>
-  <p class="lead">Fill these in once and both emails are ready to send</p>
+  <p class="lead">Fill these in once &mdash; both emails and the register move together.</p>
 </div>
 
-{#
-  A plain GET form. Without JavaScript, "Update the emails" reloads the
-  page and the links are rebuilt from the URL; with it, the links below
-  rewrite themselves as you type and the button is never needed.
-#}
-<form method="get" action="{{ url_for('leaver') }}" class="card section" id="leaver-form">
-  {{ ui.section_head(1, 'Employee details', 'The same five lines both emails carry') }}
-  {#
-    Optional shortcut, not a gate: someone can leave who never had a
-    document generated for them, so every box below is typed freely. This
-    only saves copying when they do have documents on file - and unlike
-    the handover form's lookup, this one fills the equipment too, because
-    what they are still holding is the whole point here.
-  #}
-  <div class="lookup-field">
-    <div class="lookup-box">
-      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
-      <input id="leaver-search" autocomplete="off"
-             data-employee-lookup
-             data-lookup-url="{{ url_for('api_leavers') }}"
-             data-lookup-keys="name,department,email,computer_name,serial"
-             data-lookup-email="full"
-             placeholder="Already have their file? Type a name or code to fill this in">
+<div class="leaver-layout">
+  <div class="leaver-main">
+
+    <form method="get" action="{{ url_for('leaver') }}" class="card" id="leaver-form">
+      <div class="section-title">
+        <h2>Their details</h2>
+        <span class="filled-badge partial" id="filled-badge">0 of {{ fields|length }} filled</span>
+      </div>
+      {#
+        Optional shortcut, not a gate: someone can leave who never had a
+        document generated for them, so every box below is typed freely.
+        This only saves copying when they do have documents on file - and
+        unlike the handover form's lookup, this one fills the equipment
+        too, because what they are still holding is the whole point here.
+      #}
+      <div class="lookup-field">
+        <div class="lookup-box">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+          <input id="leaver-search" autocomplete="off"
+                 data-employee-lookup
+                 data-lookup-url="{{ url_for('api_leavers') }}"
+                 data-lookup-keys="name,department,email,computer_name,serial"
+                 data-lookup-email="full"
+                 placeholder="Already have their file? Type a name or code to fill this in">
+          <span class="lookup-flag" id="lookup-flag" hidden>Equipment filled too</span>
+        </div>
+      </div>
+      <div class="grid">
+        {% for f in fields %}
+        <div class="field{{ ' span-2' if f.wide }}">
+          <label for="{{ f.key }}">{{ f.label }}</label>
+          <input id="{{ f.key }}" name="{{ f.key }}" value="{{ typed[f.key] }}"
+                 placeholder="{{ f.placeholder }}" autocomplete="off" data-leaver>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="form-actions">
+        <button type="submit" id="leaver-submit">Update the emails</button>
+      </div>
+    </form>
+
+    <div class="card">
+      <div class="section-title"><h2>Send and close out</h2></div>
+      {#
+        One button for the whole errand: both drafts open and the
+        register is updated. It only appears when the page can script it,
+        because without JavaScript there is no way to do three things on
+        one click - the two links and the register's own button still
+        work then.
+      #}
+      <div class="do-it" id="do-it" hidden>
+        <button type="button" class="button full" id="do-both">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+          Open both emails &amp; mark as left
+        </button>
+        <p class="do-it-note" id="do-it-note" role="status"></p>
+      </div>
+      <p class="or-line" id="or-line" hidden>or open them one at a time</p>
+      <div class="leaver-actions">
+        {% for m in messages %}
+        <a class="leaver-button" href="{{ links[m.key] }}"
+           data-mailto="{{ token_links[m.key] }}">
+          <span class="leaver-button-text">
+            <b>{{ m.label }}</b>
+            <span>{{ m.hint }}</span>
+          </span>
+          <span class="leaver-to {{ 'unset' if not recipients[m.key] }}">
+            {% if recipients[m.key] %}to {{ recipients[m.key] }}{% else %}no address set{% endif %}
+          </span>
+        </a>
+        {% endfor %}
+      </div>
+      <p class="leaver-note" id="leaver-blanks" hidden></p>
     </div>
   </div>
-  <div class="grid">
-    {% for f in fields %}
-    <div class="field{{ ' span-2' if f.wide }}">
-      <label for="{{ f.key }}">{{ f.label }}</label>
-      <input id="{{ f.key }}" name="{{ f.key }}" value="{{ typed[f.key] }}"
-             placeholder="{{ f.placeholder }}" autocomplete="off" data-leaver>
+
+  {# What the register still has against whoever is typed in. #}
+  <aside class="card aside-card">
+    <div class="aside-title">Still on file</div>
+    <div id="holdings">
+      {% include "_holdings.html" %}
     </div>
-    {% endfor %}
-  </div>
-  <div class="form-actions">
-    <button type="submit" id="leaver-submit">Update the emails</button>
-  </div>
-</form>
-
-<div class="card section">
-  {{ ui.section_head(2, 'Send them', 'Opens Outlook with everything written') }}
-  {#
-    One button for the whole errand: both drafts open and the register is
-    updated. It only appears when the page can script it, because
-    without JavaScript there is no way to do three things on one click -
-    the two links and the register's own button below still work then.
-  #}
-  <div class="do-it" id="do-it" hidden>
-    <button type="button" class="button full" id="do-both">
-      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M4 7l8 6 8-6"/></svg>
-      Open both emails &amp; mark as left
-    </button>
-    <p class="do-it-note" id="do-it-note" role="status"></p>
-  </div>
-  <p class="or-line" id="or-line" hidden>or open them one at a time</p>
-  <div class="leaver-actions">
-    {% for m in messages %}
-    <a class="leaver-button" href="{{ links[m.key] }}"
-       data-mailto="{{ token_links[m.key] }}">
-      <span class="leaver-button-text">
-        <b>{{ m.label }}</b>
-        <span>{{ m.hint }}</span>
-      </span>
-      <span class="leaver-to {{ 'unset' if not recipients[m.key] }}">
-        {% if recipients[m.key] %}to {{ recipients[m.key] }}{% else %}no address set{% endif %}
-      </span>
-    </a>
-    {% endfor %}
-  </div>
-  <p class="leaver-note" id="leaver-blanks" hidden></p>
-</div>
-
-{#
-  Marking someone as left is deliberately its own button, not something
-  that happens when an email is opened: you often open one just to see
-  what it says. It only appears once something on file matches.
-#}
-<div class="card section">
-  {{ ui.section_head(3, 'The laptop register', 'What they are holding') }}
-  <div id="holdings">
-    {% include "_holdings.html" %}
-  </div>
+  </aside>
 </div>
 
 <script>
@@ -152,6 +152,11 @@
         if (ready) el.removeAttribute('tabindex');
         else el.setAttribute('tabindex', '-1');
       });
+      var badge = document.getElementById('filled-badge');
+      if (badge) {
+        badge.textContent = (KEYS.length - (empty || []).length) + ' of ' + KEYS.length + ' filled';
+        badge.classList.toggle('partial', !ready);
+      }
       if (blanks) {
         blanks.hidden = ready;
         blanks.textContent = ready ? ''
@@ -187,13 +192,20 @@
           + '— the two emails above still work.</p>';
         return;
       }
-      var rows = list.map(function (l) {
-        return '<li><b></b><span></span><i></i></li>';
+      var ICON = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" '
+        + 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
+        + 'stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/>'
+        + '<path d="M2 20h20"/></svg>';
+      var rows = list.map(function () {
+        return '<li><span class="holding-icon">' + ICON + '</span>'
+          + '<span class="holding-text"><b></b><span></span><i></i></span></li>';
       }).join('');
-      holdings.innerHTML = '<ul class="holding-list">' + rows + '</ul>';
+      holdings.innerHTML = '<ul class="holding-list">' + rows + '</ul>'
+        + '<p class="holding-foot">Marking them as left releases '
+        + (list.length === 1 ? 'this serial' : 'these serials') + ' back to the pool.</p>';
       /* textContent, not string building: a model name is someone's
          typing and must never be read as markup. */
-      holdings.querySelectorAll('.holding-list li').forEach(function (li, i) {
+      holdings.querySelectorAll('.holding-text').forEach(function (li, i) {
         li.querySelector('b').textContent = list[i].model || 'Laptop';
         li.querySelector('span').textContent = list[i].serial || '';
         li.querySelector('i').textContent = list[i].status
