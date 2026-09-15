@@ -1690,6 +1690,38 @@ TEMPLATES = {
 }
 
 
+# What each document type looks like in the picker. Drawn per type
+# rather than one generic page glyph: ten identical file icons is a list
+# you have to read, and ten different shapes is a list you can scan.
+# Inner SVG only - the <svg> wrapper, size and stroke live in the CSS.
+TEMPLATE_ICONS = {
+    "laptop_handover":
+        '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/>',
+    "laptop_replacement":
+        '<path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
+    "keyboard_mouse_handover":
+        '<rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 11h.01M10 11h.01M14 11h.01M8 14h8"/>',
+    "mouse_receipt":
+        '<rect x="7" y="3" width="10" height="18" rx="5"/><path d="M12 7v4"/>',
+    "screen_handover":
+        '<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M9 21h6M12 17v4"/>',
+    "headset_handover":
+        '<path d="M4 14v-3a8 8 0 0 1 16 0v3"/><rect x="2" y="14" width="5" height="7" rx="2"/><rect x="17" y="14" width="5" height="7" rx="2"/>',
+    "printer_handover":
+        '<path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="7" rx="2"/><path d="M7 16h10v5H7z"/>',
+    "router_handover":
+        '<path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M12 20h.01"/>',
+    "flash_handover":
+        '<path d="M12 2v13"/><rect x="9" y="15" width="6" height="7" rx="1.5"/><path d="M9 7h6"/>',
+    "hard_handover":
+        '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h.01M10 12h8"/>',
+}
+
+for _tid, _icon in TEMPLATE_ICONS.items():
+    if _tid in TEMPLATES:
+        TEMPLATES[_tid]["icon"] = _icon
+
+
 # Every document collects the computer name. It is appended here rather
 # than written into each of the ten specs above so it cannot drift: one
 # line, one place, every type. On a replacement it belongs to the NEW

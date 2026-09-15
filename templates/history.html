@@ -5,7 +5,7 @@
 <div class="page-head history-head no-print">
   <div>
     <h1>History</h1>
-    <p class="lead">{{ grand_total }} document{{ '' if grand_total == 1 else 's' }} generated from this site</p>
+    <p class="lead">{{ grand_total }} document{{ '' if grand_total == 1 else 's' }} generated{% if filters %} · {{ matching }} match{{ '' if matching == 1 else 'es' }} the current filters{% endif %}</p>
   </div>
   <div class="head-actions">
     {# The register keeps itself up to date; this is for reading it from
@@ -25,52 +25,34 @@
   </div>
 </div>
 
-{# Search stays out in the open; the rest of the filters fold away, and
-   whatever is currently narrowing the list reads back in words below. #}
+{# All four controls out in the open: with only four there is nothing
+   to gain by folding three of them away, and what is currently
+   narrowing the list also reads back in words underneath. #}
 <form method="get" class="filter-bar no-print" id="filter-form">
   <div class="search-box">
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
     <input type="text" name="q" value="{{ q }}" placeholder="Search name, department or position">
   </div>
-  <button type="button" class="button-secondary" id="filter-toggle"
-          aria-expanded="{{ 'true' if filters|length > (1 if q else 0) else 'false' }}">
-    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18M7 12h10M10 19h4"/></svg>
-    Filters
-    {% if filters %}<span class="count-badge">{{ filters|length }}</span>{% endif %}
-  </button>
-  <button type="submit">Apply</button>
-
-  <div class="filter-drawer" id="filter-drawer" {% if filters|length <= (1 if q else 0) %}hidden{% endif %}>
-    <div class="field">
-      <label for="f-type">Document type</label>
-      <select id="f-type" name="type">
-        <option value="">All types</option>
-        {% for tid, spec in templates.items() %}
-        <option value="{{ tid }}" {% if tid == type_filter %}selected{% endif %}>{{ spec.label }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="field">
-      <label for="f-from">From</label>
-      <input id="f-from" type="date" name="from" value="{{ date_from }}">
-    </div>
-    <div class="field">
-      <label for="f-to">To</label>
-      <input id="f-to" type="date" name="to" value="{{ date_to }}">
-    </div>
-  </div>
+  <select id="f-type" name="type" aria-label="Document type">
+    <option value="">All types</option>
+    {% for tid, spec in templates.items() %}
+    <option value="{{ tid }}" {% if tid == type_filter %}selected{% endif %}>{{ spec.label }}</option>
+    {% endfor %}
+  </select>
+  <input id="f-from" type="date" name="from" value="{{ date_from }}" aria-label="From date">
+  <input id="f-to" type="date" name="to" value="{{ date_to }}" aria-label="To date">
+  <button type="submit" id="filter-apply">Apply</button>
 </form>
 
 {% if filters %}
 <div class="filter-chips no-print">
-  <span class="filter-chips-label">Showing</span>
+  <span class="filter-chips-label">Filtered by</span>
   {% for chip in filters %}
   <a class="filter-chip" href="{{ chip.remove }}">
     {{ chip.label }}
     <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
   </a>
   {% endfor %}
-  <span class="filter-chips-count">&mdash; {{ matching }} match{{ '' if matching == 1 else 'es' }}</span>
   <a class="filter-clear" href="{{ url_for('history') }}">Clear all</a>
 </div>
 {% endif %}
@@ -211,12 +193,17 @@
 
 <script>
   (function () {
-    var toggle = document.getElementById('filter-toggle');
-    var drawer = document.getElementById('filter-drawer');
-    if (!toggle || !drawer) return;
-    toggle.addEventListener('click', function () {
-      drawer.hidden = !drawer.hidden;
-      toggle.setAttribute('aria-expanded', String(!drawer.hidden));
+    /* The selects and dates apply themselves; Apply is what makes the
+       form work with JavaScript off, so it only hides when it is not
+       needed. Typing in the search box still waits for Enter - filtering
+       on every keystroke would reload the page mid-word. */
+    var form = document.getElementById('filter-form');
+    var apply = document.getElementById('filter-apply');
+    if (!form || !apply) return;
+    apply.hidden = true;
+    ['f-type', 'f-from', 'f-to'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('change', function () { form.submit(); });
     });
   })();
 </script>

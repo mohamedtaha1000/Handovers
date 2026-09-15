@@ -7,12 +7,18 @@
 <ul class="holding-list">
   {% for h in holdings %}
   <li>
-    <b>{{ h.model or 'Laptop' }}</b>
-    <span>{{ h.serial }}</span>
-    <i>{{ h.status }}{% if h.by %} · assigned by {{ h.by }}{% endif %}{% if h.date %} on {{ h.date }}{% endif %}</i>
+    <span class="holding-icon">
+      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg>
+    </span>
+    <span class="holding-text">
+      <b>{{ h.model or 'Laptop' }}</b>
+      <span>{{ h.serial }}</span>
+      <i>{{ h.status }}{% if h.by %} · assigned by {{ h.by }}{% endif %}{% if h.date %} on {{ h.date }}{% endif %}</i>
+    </span>
   </li>
   {% endfor %}
 </ul>
+<p class="holding-foot">Marking them as left releases {{ 'this serial' if holdings|length == 1 else 'these serials' }} back to the pool.</p>
 <form method="post" action="{{ url_for('mark_left') }}" class="form-actions">
   {% for f in fields %}
   <input type="hidden" name="{{ f.key }}" value="{{ typed[f.key] }}">
@@ -20,5 +26,5 @@
   <button type="submit" class="button-secondary">Mark as left</button>
 </form>
 {% else %}
-<p class="leaver-none">Nothing on file for this person &mdash; the two emails above still work.</p>
+<p class="leaver-none">Nothing on file for this person &mdash; the two emails still work.</p>
 {% endif %}
