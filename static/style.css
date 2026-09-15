@@ -1037,3 +1037,37 @@ td.nowrap { white-space: nowrap; }
 .summary-note { font-size: .74rem; color: var(--muted); font-weight: 400; margin-inline-start: 4px; }
 .email-extras .grid { margin-top: 16px; }
 .button-secondary.full { display: flex; justify-content: center; width: 100%; margin-top: 8px; }
+
+
+/* ---------- Someone is leaving ---------- */
+
+.leaver-note {
+  margin: 16px 0 0;
+  font-size: .82rem; color: var(--muted-strong);
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.leaver-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+@media (max-width: 620px) { .leaver-actions { grid-template-columns: 1fr; } }
+.leaver-button {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--card);
+  text-decoration: none; color: var(--text);
+  transition: border-color .15s, box-shadow .15s;
+}
+.leaver-button:hover { border-color: var(--accent); box-shadow: 0 4px 14px rgba(58, 109, 240, .12); }
+.leaver-button-text { display: flex; flex-direction: column; gap: 2px; }
+.leaver-button-text b { font-size: .95rem; font-weight: 600; }
+.leaver-button-text span { font-size: .8rem; color: var(--muted); }
+.leaver-to { font-size: .74rem; color: var(--muted); word-break: break-all; }
+.leaver-to.unset { color: var(--error-text); }

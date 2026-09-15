@@ -1446,6 +1446,15 @@ _MOBILE = {
     "pattern_msg": "Enter an 11-digit Egyptian mobile number starting with 010, 011, 012, or 015 (e.g. 01012345678).",
 }
 _EMAIL = {"key": "email", "label": "Email", "required": True, "suffix": "@stm.com.eg"}
+
+# The name of the machine on the corporate network. No template prints
+# it - none of them has a row for it - but every form collects it, so
+# the app can quote it in the emails that do need it without anyone
+# looking it up twice. Required, like everything else on these forms:
+# the whole value of recording it is that it is there when someone
+# leaves, and a blank one would only be noticed months later.
+_COMPUTER_NAME = {"key": "computer_name", "label": "Computer name",
+                  "placeholder": "STM-LT-0142", "required": True}
 _CODE = {"key": "code", "label": "Employee code", "required": True}
 _GOVID = {
     "key": "govid", "label": "National ID", "required": True, "maxlength": 14,
@@ -1679,6 +1688,16 @@ TEMPLATES = {
         ],
     },
 }
+
+
+# Every document collects the computer name. It is appended here rather
+# than written into each of the ten specs above so it cannot drift: one
+# line, one place, every type. On a replacement it belongs to the NEW
+# machine - that is the one the person walks away with - so it joins the
+# second device group where there is one.
+for _spec in TEMPLATES.values():
+    _group = "device_fields_2" if _spec.get("device_fields_2") else "device_fields"
+    _spec[_group] = list(_spec[_group]) + [_COMPUTER_NAME]
 
 
 # The picker shows the ten documents in these groups, in this order, and

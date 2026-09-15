@@ -32,6 +32,11 @@
         <label for="date">Date</label>
         <input id="date" type="date" name="date" value="{{ data.get('date', today) }}">
       </div>
+      {# One machine, one name - asked here rather than inside each
+         document below, where it would be the same answer every time. #}
+      {% for f in first.device_fields + (first.device_fields_2 or []) %}
+        {% if f.key == 'computer_name' %}{{ ui.field(f, data) }}{% endif %}
+      {% endfor %}
     </div>
   </div>
 
@@ -41,8 +46,8 @@
     {{ ui.section_head(loop.index + 1, spec.label, spec.label_ar) }}
     {% if duplicates.get(tid) %}{{ ui.duplicate_notice(spec, duplicates[tid]) }}{% endif %}
     <div class="grid grid-3">
-      {% for f in spec.device_fields %}{{ ui.field(f, data, tid ~ '__') }}{% endfor %}
-      {% for f in spec.device_fields_2 or [] %}{{ ui.field(f, data, tid ~ '__') }}{% endfor %}
+      {% for f in spec.device_fields if f.key != 'computer_name' %}{{ ui.field(f, data, tid ~ '__') }}{% endfor %}
+      {% for f in spec.device_fields_2 or [] if f.key != 'computer_name' %}{{ ui.field(f, data, tid ~ '__') }}{% endfor %}
     </div>
     {{ ui.standard_spec(spec, data, tid ~ '__') }}
   </div>
