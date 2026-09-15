@@ -98,6 +98,10 @@ Both directories are excluded from version control (see `.gitignore`).
 | `DATABASE_URL`    | No       | Overrides the default SQLite database (e.g. a Postgres connection string) with no code changes required. |
 | `PORT`            | No       | Port to listen on when run directly with `python app.py` (default `5000`). |
 | `FLASK_DEBUG`      | No       | Set to `0` to disable Flask's debug/auto-reload mode.      |
+| `HANDOVER_NOTIFY_TO`   | No   | Who the "this has been handed over" email is addressed to. Unset means the draft opens with an empty To line. |
+| `HANDOVER_NOTIFY_NAME` | No   | How that email greets its recipient (default `Eng. Hegazy`). |
+| `HANDOVER_EMS_TO`      | No   | Who the leaver's EMS deactivation email is addressed to. |
+| `HANDOVER_LEAVER_TO`   | No   | Who the leaver's resignation email is addressed to. |
 
 The app refuses to start with the placeholder `TEAM_PASSWORD` value —
 it must be set before running.

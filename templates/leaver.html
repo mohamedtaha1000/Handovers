@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% import "_fields.html" as ui %}
+{% block title %}Employee leaving{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Someone is leaving</h1>
+  <p class="lead">Fill these in once and both emails are ready to send</p>
+</div>
+
+{#
+  A plain GET form. Without JavaScript, "Update the emails" reloads the
+  page and the links are rebuilt from the URL; with it, the links below
+  rewrite themselves as you type and the button is never needed.
+#}
+<form method="get" action="{{ url_for('leaver') }}" class="card section" id="leaver-form">
+  {{ ui.section_head(1, 'Employee details', 'The same five lines both emails carry') }}
+  {#
+    Optional shortcut, not a gate: someone can leave who never had a
+    document generated for them, so every box below is typed freely. This
+    only saves copying when they do have documents on file - and unlike
+    the handover form's lookup, this one fills the equipment too, because
+    what they are still holding is the whole point here.
+  #}
+  <div class="lookup-field">
+    <div class="lookup-box">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+      <input id="leaver-search" autocomplete="off"
+             data-employee-lookup
+             data-lookup-url="{{ url_for('api_leavers') }}"
+             data-lookup-keys="name,department,email,computer_name,serial"
+             data-lookup-email="full"
+             placeholder="Already have their file? Type a name or code to fill this in">
+    </div>
+  </div>
+  <div class="grid">
+    {% for f in fields %}
+    <div class="field{{ ' span-2' if f.wide }}">
+      <label for="{{ f.key }}">{{ f.label }}</label>
+      <input id="{{ f.key }}" name="{{ f.key }}" value="{{ typed[f.key] }}"
+             placeholder="{{ f.placeholder }}" autocomplete="off" data-leaver>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="form-actions">
+    <button type="submit" id="leaver-submit">Update the emails</button>
+  </div>
+</form>
+
+<div class="card section">
+  {{ ui.section_head(2, 'Send them', 'Opens Outlook with everything written') }}
+  <div class="leaver-actions">
+    {% for m in messages %}
+    <a class="leaver-button" href="{{ links[m.key] }}"
+       data-mailto="{{ token_links[m.key] }}">
+      <span class="leaver-button-text">
+        <b>{{ m.label }}</b>
+        <span>{{ m.hint }}</span>
+      </span>
+      <span class="leaver-to {{ 'unset' if not recipients[m.key] }}">
+        {% if recipients[m.key] %}to {{ recipients[m.key] }}{% else %}no address set{% endif %}
+      </span>
+    </a>
+    {% endfor %}
+  </div>
+  <p class="leaver-note" id="leaver-blanks" hidden></p>
+</div>
+
+<script>
+  /*
+   * Keeps both links in step with the boxes above, so nothing has to be
+   * submitted. Each link arrives with a token where every value goes;
+   * this swaps in what has been typed, encoded the way the rest of the
+   * body already is. Every token is replaced on every keystroke - empty
+   * ones included - so a token can never reach Outlook.
+   */
+  (function () {
+    var form = document.getElementById('leaver-form');
+    var links = document.querySelectorAll('[data-mailto]');
+    var blanks = document.getElementById('leaver-blanks');
+    var submit = document.getElementById('leaver-submit');
+    if (!form || !links.length) return;
+
+    var TOKENS = {{ tokens|tojson }};
+    var CLAUSE_TOKEN = {{ clause_token|tojson }};
+    var CLAUSE_TEMPLATE = {{ clause_template|tojson }};
+    var LABELS = {{ fields|map(attribute='label')|list|tojson }};
+    var KEYS = {{ fields|map(attribute='key')|list|tojson }};
+
+    function refresh() {
+      var values = {}, empty = [];
+      KEYS.forEach(function (key, i) {
+        var box = form.querySelector('[name="' + key + '"]');
+        values[key] = box ? box.value.trim() : '';
+        if (!values[key]) empty.push(LABELS[i]);
+      });
+
+      /* The department appears in the sentence as well as the details,
+         and the sentence must lose the whole clause when there is no
+         department rather than read "from the department". */
+      var clause = values.department
+        ? CLAUSE_TEMPLATE.split(TOKENS.department).join(values.department)
+        : '';
+
+      Array.prototype.forEach.call(links, function (el) {
+        var url = el.dataset.mailto.split(CLAUSE_TOKEN).join(encodeURIComponent(clause));
+        KEYS.forEach(function (key) {
+          url = url.split(TOKENS[key]).join(encodeURIComponent(values[key]));
+        });
+        el.href = url;
+      });
+
+      if (blanks) {
+        blanks.hidden = empty.length === 0;
+        blanks.textContent = empty.length
+          ? 'Still empty: ' + empty.join(', ') + ' — those lines will send blank.'
+          : '';
+      }
+    }
+
+    form.addEventListener('input', refresh);
+    /* Submitting is what makes the page work without JavaScript. With it
+       the links are already current, so the button has nothing to do. */
+    if (submit) submit.hidden = true;
+    form.addEventListener('submit', function (e) { e.preventDefault(); refresh(); });
+    refresh();
+  })();
+</script>
+<script src="{{ url_for('static', filename='employee-lookup.js') }}"></script>
+{% endblock %}

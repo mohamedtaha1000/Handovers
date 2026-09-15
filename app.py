@@ -44,6 +44,7 @@ from fill_logic import (
     all_fields, required_field_keys, template_path,
 )
 import notify_email
+import leaver_email
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")  # reads SECRET_KEY / TEAM_PASSWORD from .env if present
@@ -67,6 +68,14 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 # the role - does not need an edit and a redeploy.
 NOTIFY_TO = os.environ.get("HANDOVER_NOTIFY_TO", "").strip()
 NOTIFY_NAME = os.environ.get("HANDOVER_NOTIFY_NAME", "Eng. Hegazy").strip()
+
+# Where the two leaver messages go. Separate from NOTIFY_TO because they
+# are a different conversation with a different team; either left unset
+# just means the message opens with an empty To line, which is still
+# faster than writing it out by hand.
+EMS_TO = os.environ.get("HANDOVER_EMS_TO", "").strip()
+LEAVER_TO = os.environ.get("HANDOVER_LEAVER_TO", "").strip()
+LEAVER_RECIPIENTS = {"ems": EMS_TO, "resignation": LEAVER_TO}
 
 TEAM_PASSWORD = os.environ.get("TEAM_PASSWORD") or "changeme"
 if TEAM_PASSWORD == "changeme":
@@ -446,7 +455,12 @@ def collect_values(template_id, form):
     values = {f["key"]: form.get(f["key"], "").strip() for f in fields}
     errors = []
 
-    missing = [k for k in required_field_keys(template_id) if not values[k]]
+    # Named the way the form labels them, not by their internal keys:
+    # this message is now the thing an older record shows when it is
+    # opened for editing and has no computer name yet, so it has to read
+    # like a sentence rather than like a database column.
+    labels = {f["key"]: f["label"] for f in fields}
+    missing = [labels.get(k, k) for k in required_field_keys(template_id) if not values[k]]
     if missing:
         errors.append("Please fill in all required fields: " + ", ".join(missing))
 
@@ -692,15 +706,23 @@ def edit_document(record_id):
 # serial would overwrite the laptop's.
 # ----------------------------------------------------------------------
 
+# Asked once on the combined form and used by every document in it.
+# The employee half, the date - and the computer name, because a person
+# handed a laptop, a mouse and a headset on the same morning is sitting
+# at one machine, and typing its name three times would only be a way to
+# get it wrong twice.
+SHARED_BATCH_KEYS = EMPLOYEE_KEYS + ("date", "computer_name")
+
+
 def scoped_form(template_id, form):
     """A view of the submitted form as this one template expects it:
-    shared employee fields as they are, device fields un-prefixed."""
+    shared fields as they are, per-document fields un-prefixed."""
     prefix = f"{template_id}__"
     scoped = {}
     for key in form.keys():
         if key.startswith(prefix):
             scoped[key[len(prefix):]] = form.get(key)
-        elif key in EMPLOYEE_KEYS or key == "date":
+        elif key in SHARED_BATCH_KEYS:
             scoped[key] = form.get(key)
     return scoped
 
@@ -1066,6 +1088,125 @@ def export_history():
     return send_file(
         buf, as_attachment=True, download_name=filename,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ----------------------------------------------------------------------
+# Someone is leaving
+#
+# Two messages go out when an employee resigns. Every detail is typed
+# here rather than looked up: people leave who never had a document
+# generated for them, and a page that could only describe employees on
+# file would be useless exactly when it was needed.
+#
+# The form is plain GET, so it works with JavaScript off - the details
+# come back in the URL and the links are rebuilt server-side. With
+# JavaScript on, the links carry a token per field and are rewritten as
+# the boxes are typed, so the buttons are live and nothing has to be
+# submitted at all.
+# ----------------------------------------------------------------------
+
+# Where a computer's serial number lives, per document type. A
+# replacement issues a new machine, so its NEW serial is the one the
+# person is still holding on the day they leave. A headset receipt has a
+# serial too and it is not the one the security team is asking about, so
+# only these two count.
+COMPUTER_SERIAL_KEYS = {
+    "laptop_handover": "serial",
+    "laptop_replacement": "new_serial",
+}
+
+
+def leaver_lookup(limit=400):
+    """Everyone with a document on file, shaped like the leaver form.
+
+    Feeds the "reuse someone already on file" suggestions on that page.
+    Nobody has to be here - the form is typed either way - but when the
+    person does have documents this saves copying five things across.
+
+    Employee details come from their most recent document, so a change of
+    department is reflected. The serial comes from the most recent
+    document that actually issued them a computer, and the computer name
+    from the most recent document that recorded one.
+    """
+    records = (Handover.query
+               .order_by(Handover.created_at.desc(), Handover.id.desc())
+               .limit(limit).all())
+    grouped = {}
+    for record in records:
+        key = employee_identity(record)
+        if key:
+            grouped.setdefault(key, []).append(record)
+
+    people = []
+    for mine in grouped.values():
+        newest = mine[0]
+        fields = newest.fields
+        serial = next(
+            ((r.fields.get(COMPUTER_SERIAL_KEYS[r.template_id]) or "").strip()
+             for r in mine
+             if r.template_id in COMPUTER_SERIAL_KEYS
+             and (r.fields.get(COMPUTER_SERIAL_KEYS[r.template_id]) or "").strip()), "")
+        computer = next(((r.fields.get("computer_name") or "").strip()
+                         for r in mine if (r.fields.get("computer_name") or "").strip()), "")
+        name = newest.name or (fields.get("name") or "").strip()
+        if not name:
+            continue
+        people.append({
+            "name": name,
+            "department": (fields.get("department") or newest.department or "").strip(),
+            "email": (fields.get("email") or "").strip(),
+            "computer_name": computer,
+            "serial": serial,
+            "code": (fields.get("code") or "").strip(),
+        })
+    return people
+
+
+@app.route("/api/leavers")
+@login_required
+def api_leavers():
+    """Feeds the suggestions on the leaver page. Deliberately a different
+    endpoint from /api/employees: that one must never hand a serial
+    number to a handover form, and this one exists to hand one over."""
+    query = request.args.get("q", "").strip().lower()
+    people = leaver_lookup()
+    if query:
+        people = [p for p in people
+                  if query in p["name"].lower()
+                  or query in p["code"].lower()
+                  or query in p["department"].lower()]
+    return {"employees": people[:8]}
+
+
+def leaver_links(person):
+    """A mailto: for each of the two messages, from one set of details."""
+    links = {}
+    for message in leaver_email.MESSAGES:
+        to = LEAVER_RECIPIENTS.get(message["key"], "")
+        query = urlencode({"subject": message["subject"](person),
+                           "body": message["body"](person)}, quote_via=quote)
+        links[message["key"]] = f"mailto:{quote(to, safe='@.')}?{query}"
+    return links
+
+
+@app.route("/leaver")
+@login_required
+def leaver():
+    typed = {f["key"]: request.args.get(f["key"], "").strip()
+             for f in leaver_email.FORM_FIELDS}
+    return render_template(
+        "leaver.html",
+        fields=leaver_email.FORM_FIELDS, typed=typed,
+        messages=leaver_email.MESSAGES, recipients=LEAVER_RECIPIENTS,
+        links=leaver_links(typed),
+        # The same two links with a token wherever a value goes, for the
+        # browser to fill in as the boxes are typed.
+        token_links=leaver_links({**leaver_email.TOKENS,
+                                  "dept_clause": leaver_email.CLAUSE_TOKEN}),
+        tokens=leaver_email.TOKENS,
+        clause_token=leaver_email.CLAUSE_TOKEN,
+        clause_template=leaver_email.CLAUSE_TEMPLATE,
     )
 
 
