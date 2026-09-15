@@ -9,7 +9,7 @@ searchable, deletable history of every document it has generated.
 
 Supports multiple document templates (laptop handover, laptop
 replacement, keyboard/mouse receipt, screen handover, ...) - see
-fill_logic.py's TEMPLATES registry, which is the single source of truth
+templates.py's TEMPLATES registry, which is the single source of truth
 for what documents exist and what fields each one's form collects. Adding
 a new document type later means adding one entry there plus a .docx file
 in doc_templates/ - nothing in this file needs to change.
@@ -36,139 +36,53 @@ from flask import (
     Flask, render_template, request, redirect, url_for,
     session, send_from_directory, flash, abort,
 )
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import inspect, text
 
-from fill_logic import (
-    TEMPLATES, TEMPLATE_GROUPS,
+from templates import (
+    EMPLOYEE_KEYS, TEMPLATES, TEMPLATE_GROUPS,
     all_fields, required_field_keys, template_path,
 )
+import builders
 import notify_email
 import leaver_email
 import asset_register
-
-BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(BASE_DIR / ".env")  # reads SECRET_KEY / TEAM_PASSWORD from .env if present
-GENERATED_DIR = BASE_DIR / "generated"
-INSTANCE_DIR = BASE_DIR / "instance"
-GENERATED_DIR.mkdir(exist_ok=True)
-INSTANCE_DIR.mkdir(exist_ok=True)
+import documents
+import employees
+import settings
+from documents import (
+    batch_records, collect_values, display_filename, form_data_from_record,
+    generated_filename, scoped_form, stamp_record, write_document,
+)
+from employees import (
+    employee_identity, equipment_summary, find_duplicate,
+    known_employees, leaver_lookup, matching_laptops, register_rows,
+)
+from models import Handover, Departure, create_all_and_migrate, db
 
 app = Flask(__name__)
 
-# --- Configuration (override these via environment variables when you
-# deploy - see README.md) ------------------------------------------------
-app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
-app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
-    "DATABASE_URL", f"sqlite:///{INSTANCE_DIR / 'handovers.db'}"
-)
+# Everything configurable lives in settings.py. Read through the module
+# (settings.X) rather than importing the names, so a test that points the
+# app at a temporary folder is actually seen by the code that writes
+# there.
+app.config["SECRET_KEY"] = settings.SECRET_KEY or secrets.token_hex(32)
+app.config["SQLALCHEMY_DATABASE_URI"] = settings.DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-# Who the "this has been handed over" email is addressed to. Kept in the
-# environment rather than the code so a change of owner - or of person in
-# the role - does not need an edit and a redeploy.
-NOTIFY_TO = os.environ.get("HANDOVER_NOTIFY_TO", "").strip()
-NOTIFY_NAME = os.environ.get("HANDOVER_NOTIFY_NAME", "Eng. Hegazy").strip()
+# The two leaver addresses as one lookup, so a message can ask for its
+# own recipient by name. Built here rather than in settings.py because
+# it pairs a setting with a message key, which is an app-level idea.
+LEAVER_RECIPIENTS = {"ems": settings.EMS_TO, "resignation": settings.LEAVER_TO}
 
-# Where the two leaver messages go. Separate from NOTIFY_TO because they
-# are a different conversation with a different team; either left unset
-# just means the message opens with an empty To line, which is still
-# faster than writing it out by hand.
-EMS_TO = os.environ.get("HANDOVER_EMS_TO", "").strip()
-LEAVER_TO = os.environ.get("HANDOVER_LEAVER_TO", "").strip()
-LEAVER_RECIPIENTS = {"ems": EMS_TO, "resignation": LEAVER_TO}
-
-# The laptop register. Beside the app by default, so on a machine where
-# the folder is synced it simply appears - no download step, no second
-# copy to go stale. Somewhere else via HANDOVER_REGISTER_PATH.
-REGISTER_PATH = Path(os.environ.get(
-    "HANDOVER_REGISTER_PATH", str(BASE_DIR / "laptop_register.xlsx")))
-
-TEAM_PASSWORD = os.environ.get("TEAM_PASSWORD") or "changeme"
-if TEAM_PASSWORD == "changeme":
+if settings.TEAM_PASSWORD == "changeme":
     app.logger.warning(
         "TEAM_PASSWORD is empty or not set - using the insecure default "
         "'changeme'. Set a real TEAM_PASSWORD in your .env file (or as an "
         "environment variable when you deploy)."
     )
 
-db = SQLAlchemy(app)
-
-
-class Handover(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    template_id = db.Column(db.String(60), nullable=False, default="laptop_handover")
-    name = db.Column(db.String(200), nullable=False)
-    department = db.Column(db.String(120))
-    role = db.Column(db.String(120))
-    govid = db.Column(db.String(40))
-    handover_date = db.Column(db.String(20))
-    # Every field the form collected for this document (mobile, email,
-    # code, and whatever device-specific fields that template has) -
-    # kept as JSON since different templates collect very different
-    # fields. name/department/role/govid above are duplicated out as
-    # real columns just so the history list can show and search them
-    # without needing to parse JSON for every row.
-    fields_json = db.Column(db.Text)
-    filename = db.Column(db.String(300), nullable=False)
-    created_by = db.Column(db.String(120))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    # Set only once a record has actually been corrected, so "never
-    # edited" stays distinguishable from "edited by the same person who
-    # created it, straight away".
-    updated_by = db.Column(db.String(120))
-    updated_at = db.Column(db.DateTime)
-
-    @property
-    def fields(self):
-        try:
-            return json.loads(self.fields_json) if self.fields_json else {}
-        except (TypeError, ValueError):
-            return {}
-
-    @property
-    def template_label(self):
-        spec = TEMPLATES.get(self.template_id)
-        return spec["label"] if spec else self.template_id
-
-
-class Departure(db.Model):
-    """Someone who has left. Kept per person rather than per document:
-    they hand back everything at once, and the register works out which
-    rows that touches."""
-    id = db.Column(db.Integer, primary_key=True)
-    # employee_identity(): the employee code where there is one, the
-    # national ID behind it, the name as a last resort.
-    identity = db.Column(db.String(160), unique=True, index=True)
-    name = db.Column(db.String(200))
-    left_on = db.Column(db.String(20))
-    recorded_by = db.Column(db.String(120))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-
+db.init_app(app)
 with app.app_context():
-    db.create_all()
-
-    # Lightweight migration: add any columns older databases don't have
-    # yet, without touching (or losing) existing rows. SQLite's ALTER
-    # TABLE only supports adding columns, which is all we need here.
-    inspector = inspect(db.engine)
-    if "handover" in inspector.get_table_names():
-        existing_cols = {c["name"] for c in inspector.get_columns("handover")}
-        with db.engine.begin() as conn:
-            if "template_id" not in existing_cols:
-                conn.execute(text(
-                    "ALTER TABLE handover ADD COLUMN template_id VARCHAR(60) "
-                    "DEFAULT 'laptop_handover'"
-                ))
-            if "fields_json" not in existing_cols:
-                conn.execute(text("ALTER TABLE handover ADD COLUMN fields_json TEXT"))
-            if "govid" not in existing_cols:
-                conn.execute(text("ALTER TABLE handover ADD COLUMN govid VARCHAR(40)"))
-            if "updated_by" not in existing_cols:
-                conn.execute(text("ALTER TABLE handover ADD COLUMN updated_by VARCHAR(120)"))
-            if "updated_at" not in existing_cols:
-                conn.execute(text("ALTER TABLE handover ADD COLUMN updated_at DATETIME"))
+    create_all_and_migrate()
 
 
 @app.context_processor
@@ -176,7 +90,7 @@ def notify_details():
     """Who the handover email goes to, available to every template so the
     buttons and the optional section can name them rather than saying
     "the asset owner"."""
-    return {"notify_name": NOTIFY_NAME, "notify_to": NOTIFY_TO}
+    return {"notify_name": settings.NOTIFY_NAME, "notify_to": settings.NOTIFY_TO}
 
 
 @app.template_filter("initials")
@@ -227,7 +141,7 @@ def login():
         display_name = request.form.get("your_name", "").strip()
         if not display_name:
             error = "Please enter your name"
-        elif not secrets.compare_digest(password, TEAM_PASSWORD):
+        elif not secrets.compare_digest(password, settings.TEAM_PASSWORD):
             error = "Wrong password"
         else:
             session["logged_in"] = True
@@ -266,38 +180,6 @@ def index():
 FILENAME_UNSAFE_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
-def display_filename(template_id, name):
-    """The clean, human-facing filename a person sees when they download -
-    e.g. "استلام لابتوب(Name).docx" - no timestamps or ids in it."""
-    spec = TEMPLATES.get(template_id, {})
-    prefix = spec.get("filename_prefix", "مستند")
-    safe_name = FILENAME_UNSAFE_RE.sub("", name).strip() or "employee"
-    return f"{prefix}({safe_name}).docx"
-
-
-def generated_filename(template_id, name, date_obj, exclude=None):
-    """The filename a generated document is actually saved under in
-    generated/ - e.g. "Yasmin Mohamed - Laptop Handover - 2026-09-10.docx" -
-    so the folder is browsable on its own, not just through the site.
-    Still collision-safe: if that exact name already exists (same person,
-    same document type, same day), a " (2)", " (3)", ... counter is
-    appended rather than overwriting an earlier document."""
-    spec = TEMPLATES.get(template_id, {})
-    label = spec.get("label", template_id)
-    safe_name = FILENAME_UNSAFE_RE.sub("", name).strip() or "employee"
-    safe_label = FILENAME_UNSAFE_RE.sub("", label).strip() or template_id
-    date_str = date_obj.strftime("%Y-%m-%d")
-    base = f"{safe_name} - {safe_label} - {date_str}"
-    candidate = f"{base}.docx"
-    n = 2
-    # `exclude` is the record's own current file when re-generating after
-    # an edit: without it, correcting a typo that doesn't change the name
-    # or the date would see the record's existing file, decide the name
-    # was taken, and save the correction as " (2)" beside the original.
-    while (GENERATED_DIR / candidate).exists() and candidate != exclude:
-        candidate = f"{base} ({n}).docx"
-        n += 1
-    return candidate
 
 
 # ----------------------------------------------------------------------
@@ -322,26 +204,7 @@ def grouped_templates():
 
 # The fields worth showing in the history table's equipment column, in
 # the order we would rather have them: what the thing is, then which one.
-EQUIPMENT_KEYS = ("model", "new_model", "brand", "capacity", "old_model")
-SERIAL_KEYS = ("serial", "new_serial", "sim_number", "old_serial")
 
-
-def equipment_summary(record):
-    """A one-line "what was handed over" for a history row: the model (or
-    brand, or capacity) and the serial, drawn from whichever fields that
-    document type happens to collect."""
-    fields = record.fields
-    def first(keys):
-        for key in keys:
-            value = (fields.get(key) or "").strip()
-            if value:
-                return value
-        return ""
-    what = first(EQUIPMENT_KEYS)
-    brand = (fields.get("brand") or "").strip()
-    if brand and what and brand != what:
-        what = f"{brand} {what}"
-    return {"what": what, "serial": first(SERIAL_KEYS)}
 
 
 def active_filters(q, type_filter, date_from, date_to):
@@ -381,42 +244,8 @@ def active_filters(q, type_filter, date_from, date_to):
 # Fields that describe the person rather than the equipment. Only these
 # are ever copied from a previous document - the serial number of the
 # laptop they were given last year must not follow them onto a new one.
-EMPLOYEE_KEYS = ("name", "department", "role", "mobile", "email", "code", "govid")
 
 
-def employee_identity(record):
-    """What makes two records the same person. The employee code is the
-    real identifier; the national ID backs it up for older records that
-    predate the code field, and the name is the last resort."""
-    fields = record.fields
-    code = (fields.get("code") or "").strip().lower()
-    govid = (record.govid or "").strip()
-    return code or govid or (record.name or "").strip().lower()
-
-
-def known_employees(limit=400):
-    """One entry per person, taken from their most recent document.
-
-    Most recent matters: someone who changed department should come back
-    with the department they are in now, not the one they were in when
-    they were first issued a laptop."""
-    records = (Handover.query
-               .order_by(Handover.created_at.desc(), Handover.id.desc())
-               .limit(limit).all())
-    people = {}
-    for record in records:
-        key = employee_identity(record)
-        if not key or key in people:
-            continue
-        fields = record.fields
-        entry = {k: (fields.get(k) or "") for k in EMPLOYEE_KEYS}
-        entry["name"] = entry["name"] or record.name or ""
-        entry["department"] = entry["department"] or record.department or ""
-        entry["role"] = entry["role"] or record.role or ""
-        entry["govid"] = entry["govid"] or record.govid or ""
-        if entry["name"]:
-            people[key] = entry
-    return list(people.values())
 
 
 @app.route("/api/employees")
@@ -433,28 +262,6 @@ def api_employees():
     return {"employees": people[:8]}
 
 
-def find_duplicate(template_id, values, exclude_id=None):
-    """An earlier document of this same type for this same person, if
-    there is one. Two handovers of the same thing to the same person is
-    usually a mistake - or a sign the replacement template was the one
-    actually wanted - so it is worth asking before generating another."""
-    code = (values.get("code") or "").strip()
-    govid = (values.get("govid") or "").strip()
-    name = (values.get("name") or "").strip()
-
-    query = Handover.query.filter(Handover.template_id == template_id)
-    if exclude_id is not None:
-        query = query.filter(Handover.id != exclude_id)
-    for record in query.order_by(Handover.created_at.desc()).limit(200).all():
-        fields = record.fields
-        if code and (fields.get("code") or "").strip() == code:
-            return record
-        if govid and (record.govid or "").strip() == govid:
-            return record
-        if not code and not govid and name and (record.name or "").strip() == name:
-            return record
-    return None
-
 
 # ----------------------------------------------------------------------
 # Shared form handling
@@ -467,57 +274,47 @@ def find_duplicate(template_id, values, exclude_id=None):
 # could still be edited back in afterwards.
 # ----------------------------------------------------------------------
 
-def collect_values(template_id, form):
-    """Read this template's fields out of a submitted form, validate them,
-    and return (values, fill_data, date_obj, errors). `errors` empty means
-    the submission is good."""
-    spec = TEMPLATES[template_id]
-    fields = all_fields(template_id)
-    values = {f["key"]: form.get(f["key"], "").strip() for f in fields}
-    errors = []
 
-    # Named the way the form labels them, not by their internal keys:
-    # this message is now the thing an older record shows when it is
-    # opened for editing and has no computer name yet, so it has to read
-    # like a sentence rather than like a database column.
-    labels = {f["key"]: f["label"] for f in fields}
-    missing = [labels.get(k, k) for k in required_field_keys(template_id) if not values[k]]
-    if missing:
-        errors.append("Please fill in all required fields: " + ", ".join(missing))
 
-    # Format checks (mobile number, national ID, ...) - only fields whose
-    # spec declares a "pattern" get checked; a value that's merely
-    # non-empty but the wrong shape (too short, letters where there should
-    # be digits, ...) is caught here rather than ending up wrong inside
-    # the generated document.
-    for f in fields:
-        pattern = f.get("pattern")
-        if not pattern or not values.get(f["key"]):
-            continue
-        if not re.fullmatch(pattern, values[f["key"]]):
-            errors.append(f.get("pattern_msg") or f"{f['label']} is not the right format.")
+def save_document(template_id, values, fill_data, date_obj, record=None):
+    """Generate the .docx and store it, as one step.
 
-    # Email field (only some templates have one): always force the
-    # @stm.com.eg domain - only the part before an "@" (if the person
-    # typed one) is kept, so it's impossible to end up with any other
-    # domain.
-    if "email" in values and values["email"]:
-        values["email"] = values["email"].split("@")[0].strip() + "@stm.com.eg"
+    Returns (record, problem). `problem` is a sentence to show the person
+    and means nothing was saved - the file is written before the row is
+    touched, so a template that fails to fill cannot leave a row pointing
+    at a document that was never made.
 
-    date_input = form.get("date", "").strip()
-    date_obj = datetime.today()
-    if date_input:
-        try:
-            date_obj = datetime.strptime(date_input, "%Y-%m-%d")
-        except ValueError:
-            errors.append("Invalid date")
+    Pass `record` to regenerate an existing one; leave it out to make a
+    new one.
+    """
+    editing = record is not None
+    internal_name = generated_filename(
+        template_id, values["name"], date_obj,
+        exclude=record.filename if editing else None)
 
-    fill_data = dict(values)
-    fill_data["date_obj"] = date_obj
-    for extra in spec.get("extra_fields", []):
-        fill_data[extra["key"]] = form.get(extra["key"], "").strip() or extra.get("default", "")
+    problem = write_document(template_id, fill_data, internal_name)
+    if problem:
+        return None, problem
 
-    return values, fill_data, date_obj, errors
+    if editing:
+        # The old file is only removed once the new one exists, and only
+        # if the name actually changed.
+        if record.filename and record.filename != internal_name:
+            old_file = settings.GENERATED_DIR / record.filename
+            if old_file.exists():
+                old_file.unlink()
+        stamp_record(record, template_id, values, fill_data, date_obj, internal_name)
+        record.updated_by = session.get("display_name", "-")
+        record.updated_at = datetime.utcnow()
+    else:
+        record = stamp_record(Handover(), template_id, values, fill_data,
+                              date_obj, internal_name)
+        record.created_by = session.get("display_name", "-")
+        db.session.add(record)
+
+    db.session.commit()
+    register_updated()
+    return record, None
 
 
 def render_form(template_id, data, record=None, duplicate=None):
@@ -529,58 +326,6 @@ def render_form(template_id, data, record=None, duplicate=None):
     )
 
 
-def write_document(template_id, fill_data, internal_name):
-    """Generate the .docx into generated/ under `internal_name`.
-
-    Written to a temporary file first and moved into place only once it
-    has been produced in full, so a re-generation that fails part way
-    through can't leave a half-written document where a good one was."""
-    spec = TEMPLATES[template_id]
-    doc_path = template_path(template_id)
-    if not doc_path.exists():
-        return f"{spec['doc_file']} is missing on the server."
-    tmp_path = GENERATED_DIR / f".tmp-{secrets.token_hex(8)}.docx"
-    try:
-        spec["fill"](doc_path, tmp_path, fill_data)
-        os.replace(tmp_path, GENERATED_DIR / internal_name)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
-    return None
-
-
-def form_data_from_record(record):
-    """Turn a saved record back into the dict form.html pre-fills from."""
-    data = dict(record.fields)
-
-    # The date is stored as a "YYYY-MM-DD HH:MM:SS" string (fields_json
-    # serialises the datetime), but <input type="date"> needs the bare
-    # date, so hand it one it will actually display.
-    raw = str(data.pop("date_obj", "") or "")
-    stamp = ""
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-        try:
-            stamp = datetime.strptime(raw[:19] if " " in raw else raw, fmt).strftime("%Y-%m-%d")
-            break
-        except ValueError:
-            continue
-    if not stamp and record.handover_date:
-        try:
-            day, month, year = record.handover_date.split("/")
-            stamp = f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
-        except (ValueError, AttributeError):
-            stamp = ""
-    data["date"] = stamp or date.today().isoformat()
-
-    # A field rendered with a suffix (the "@stm.com.eg" on the email box)
-    # only ever shows the part before it, so strip the suffix back off -
-    # otherwise editing would round-trip to "name@stm.com.eg@stm.com.eg".
-    for f in all_fields(record.template_id):
-        suffix = f.get("suffix")
-        value = data.get(f["key"], "")
-        if suffix and isinstance(value, str) and value.endswith(suffix):
-            data[f["key"]] = value[: -len(suffix)]
-    return data
 
 
 # ----------------------------------------------------------------------
@@ -615,24 +360,10 @@ def new_document(template_id):
             if duplicate is not None:
                 return render_form(template_id, request.form, duplicate=duplicate)
 
-        internal_name = generated_filename(template_id, values["name"], date_obj)
-        problem = write_document(template_id, fill_data, internal_name)
+        record, problem = save_document(template_id, values, fill_data, date_obj)
         if problem:
             flash(problem, "error")
             return render_form(template_id, request.form)
-
-        record = Handover(
-            template_id=template_id,
-            name=values["name"], department=values["department"], role=values["role"],
-            govid=values.get("govid", ""),
-            handover_date=f"{date_obj.day}/{date_obj.month}/{date_obj.year}",
-            fields_json=json.dumps(fill_data, default=str),
-            filename=internal_name,
-            created_by=session.get("display_name", "-"),
-        )
-        db.session.add(record)
-        db.session.commit()
-        register_updated()
 
         return redirect(url_for("done", record_id=record.id))
 
@@ -684,30 +415,11 @@ def edit_document(record_id):
                 flash(message, "error")
             return render_form(template_id, request.form, record=record)
 
-        previous_name = record.filename
-        internal_name = generated_filename(
-            template_id, values["name"], date_obj, exclude=previous_name)
-        problem = write_document(template_id, fill_data, internal_name)
+        record, problem = save_document(template_id, values, fill_data, date_obj,
+                                        record=record)
         if problem:
             flash(problem, "error")
             return render_form(template_id, request.form, record=record)
-
-        if previous_name != internal_name:
-            old_file = GENERATED_DIR / previous_name
-            if old_file.exists():
-                old_file.unlink()
-
-        record.name = values["name"]
-        record.department = values["department"]
-        record.role = values["role"]
-        record.govid = values.get("govid", "")
-        record.handover_date = f"{date_obj.day}/{date_obj.month}/{date_obj.year}"
-        record.fields_json = json.dumps(fill_data, default=str)
-        record.filename = internal_name
-        record.updated_by = session.get("display_name", "-")
-        record.updated_at = datetime.utcnow()
-        db.session.commit()
-        register_updated()
 
         flash(f"Saved. The document for {record.name} has been generated again.", "success")
         return redirect(url_for("done", record_id=record.id))
@@ -729,25 +441,6 @@ def edit_document(record_id):
 # serial would overwrite the laptop's.
 # ----------------------------------------------------------------------
 
-# Asked once on the combined form and used by every document in it.
-# The employee half, the date - and the computer name, because a person
-# handed a laptop, a mouse and a headset on the same morning is sitting
-# at one machine, and typing its name three times would only be a way to
-# get it wrong twice.
-SHARED_BATCH_KEYS = EMPLOYEE_KEYS + ("date", "computer_name")
-
-
-def scoped_form(template_id, form):
-    """A view of the submitted form as this one template expects it:
-    shared fields as they are, per-document fields un-prefixed."""
-    prefix = f"{template_id}__"
-    scoped = {}
-    for key in form.keys():
-        if key.startswith(prefix):
-            scoped[key[len(prefix):]] = form.get(key)
-        elif key in SHARED_BATCH_KEYS:
-            scoped[key] = form.get(key)
-    return scoped
 
 
 @app.route("/new", methods=["POST"])
@@ -806,28 +499,24 @@ def new_batch():
         if duplicates:
             return show(request.form, duplicates=duplicates)
 
+        # Each document is saved as it is made, rather than all of them at
+        # the end. It means a batch that fails on its third document
+        # keeps the first two - file and row together - instead of
+        # leaving two .docx files on disk that no record points at, which
+        # is what the single commit at the end used to do. The person is
+        # told exactly where it stopped so they can finish the rest.
         created = []
         for template_id in chosen:
             values, fill_data, date_obj = collected[template_id]
-            internal_name = generated_filename(template_id, values["name"], date_obj)
-            problem = write_document(template_id, fill_data, internal_name)
+            record, problem = save_document(template_id, values, fill_data, date_obj)
             if problem:
                 flash(problem, "error")
+                if created:
+                    done = ", ".join(TEMPLATES[t]["label"] for t in chosen[:len(created)])
+                    flash(f"{len(created)} of {len(chosen)} were made and saved "
+                          f"({done}). Only the rest still need doing.", "info")
                 return show(request.form)
-            record = Handover(
-                template_id=template_id,
-                name=values["name"], department=values["department"],
-                role=values["role"], govid=values.get("govid", ""),
-                handover_date=f"{date_obj.day}/{date_obj.month}/{date_obj.year}",
-                fields_json=json.dumps(fill_data, default=str),
-                filename=internal_name,
-                created_by=session.get("display_name", "-"),
-            )
-            db.session.add(record)
-            db.session.flush()
             created.append(record.id)
-        db.session.commit()
-        register_updated()
         return redirect(url_for("done_batch", ids=",".join(str(i) for i in created)))
 
     prefill = {}
@@ -841,11 +530,6 @@ def new_batch():
                 prefill["email"] = prefill["email"].split("@")[0]
     return show(prefill)
 
-
-def batch_records(raw_ids):
-    ids = [int(i) for i in raw_ids.split(",") if i.strip().isdigit()]
-    found = {r.id: r for r in Handover.query.filter(Handover.id.in_(ids)).all()} if ids else {}
-    return [found[i] for i in ids if i in found]
 
 
 @app.route("/done-batch")
@@ -880,7 +564,7 @@ def download_batch():
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as bundle:
         used = set()
         for record in records:
-            path = GENERATED_DIR / record.filename
+            path = settings.GENERATED_DIR / record.filename
             if not path.exists():
                 continue
             name = display_filename(record.template_id, record.name)
@@ -921,10 +605,10 @@ def build_mailto(records, detailed):
     # whoever's Outlook clicked the link, and their own signature goes
     # under it.
     body = notify_email.build_body(
-        records, greeting_name=NOTIFY_NAME, detailed=detailed)
+        records, greeting_name=settings.NOTIFY_NAME, detailed=detailed)
     query = urlencode({"subject": notify_email.subject_for(records), "body": body},
                       quote_via=quote)
-    return f"mailto:{quote(NOTIFY_TO, safe='@.')}?{query}"
+    return f"mailto:{quote(settings.NOTIFY_TO, safe='@.')}?{query}"
 
 
 def mailto_link(records):
@@ -957,11 +641,11 @@ def done(record_id):
 @login_required
 def get_file(record_id):
     record = Handover.query.get_or_404(record_id)
-    file_path = GENERATED_DIR / record.filename
+    file_path = settings.GENERATED_DIR / record.filename
     if not file_path.exists():
         abort(404)
     return send_from_directory(
-        GENERATED_DIR, record.filename,
+        settings.GENERATED_DIR, record.filename,
         as_attachment=True, download_name=display_filename(record.template_id, record.name),
     )
 
@@ -1078,11 +762,6 @@ def _filtered_history_query():
 # for the shape of it.
 # ----------------------------------------------------------------------
 
-def register_rows():
-    records = Handover.query.all()
-    departures = {d.identity: d for d in Departure.query.all()}
-    return asset_register.build_rows(records, employee_identity, departures)
-
 
 def refresh_register():
     """Rebuild the sheet. Returns None on success, or a sentence saying
@@ -1095,10 +774,10 @@ def refresh_register():
     saying plainly rather than reporting as an error.
     """
     try:
-        asset_register.write_workbook(register_rows(), REGISTER_PATH)
+        asset_register.write_workbook(register_rows(), settings.REGISTER_PATH)
         return None
     except PermissionError:
-        return (f"The laptop register ({REGISTER_PATH.name}) is open in Excel, "
+        return (f"The laptop register ({settings.REGISTER_PATH.name}) is open in Excel, "
                 f"so it could not be updated. Close it and the next document "
                 f"will bring it up to date.")
     except Exception as problem:            # noqa: BLE001 - never block the document
@@ -1121,13 +800,13 @@ def download_register():
     """The file itself. It lives beside the app, but the app may be on a
     different machine from whoever wants to read it."""
     from flask import send_file
-    if not REGISTER_PATH.exists():
+    if not settings.REGISTER_PATH.exists():
         problem = refresh_register()
         if problem:
             flash(problem, "error")
             return redirect(url_for("history"))
     return send_file(
-        REGISTER_PATH, as_attachment=True,
+        settings.REGISTER_PATH, as_attachment=True,
         download_name=f"laptop-register-{date.today().isoformat()}.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
@@ -1164,56 +843,7 @@ def rebuild_register():
 # person is still holding on the day they leave. A headset receipt has a
 # serial too and it is not the one the security team is asking about, so
 # only these two count.
-COMPUTER_SERIAL_KEYS = {
-    "laptop_handover": "serial",
-    "laptop_replacement": "new_serial",
-}
 
-
-def leaver_lookup(limit=400):
-    """Everyone with a document on file, shaped like the leaver form.
-
-    Feeds the "reuse someone already on file" suggestions on that page.
-    Nobody has to be here - the form is typed either way - but when the
-    person does have documents this saves copying five things across.
-
-    Employee details come from their most recent document, so a change of
-    department is reflected. The serial comes from the most recent
-    document that actually issued them a computer, and the computer name
-    from the most recent document that recorded one.
-    """
-    records = (Handover.query
-               .order_by(Handover.created_at.desc(), Handover.id.desc())
-               .limit(limit).all())
-    grouped = {}
-    for record in records:
-        key = employee_identity(record)
-        if key:
-            grouped.setdefault(key, []).append(record)
-
-    people = []
-    for mine in grouped.values():
-        newest = mine[0]
-        fields = newest.fields
-        serial = next(
-            ((r.fields.get(COMPUTER_SERIAL_KEYS[r.template_id]) or "").strip()
-             for r in mine
-             if r.template_id in COMPUTER_SERIAL_KEYS
-             and (r.fields.get(COMPUTER_SERIAL_KEYS[r.template_id]) or "").strip()), "")
-        computer = next(((r.fields.get("computer_name") or "").strip()
-                         for r in mine if (r.fields.get("computer_name") or "").strip()), "")
-        name = newest.name or (fields.get("name") or "").strip()
-        if not name:
-            continue
-        people.append({
-            "name": name,
-            "department": (fields.get("department") or newest.department or "").strip(),
-            "email": (fields.get("email") or "").strip(),
-            "computer_name": computer,
-            "serial": serial,
-            "code": (fields.get("code") or "").strip(),
-        })
-    return people
 
 
 @app.route("/api/leavers")
@@ -1242,30 +872,6 @@ def leaver_links(person):
         links[message["key"]] = f"mailto:{quote(to, safe='@.')}?{query}"
     return links
 
-
-def matching_laptops(name="", serial="", code=""):
-    """The laptop rows the register holds for whoever is typed into the
-    leaver page.
-
-    That page is free text - the person may never have had a document
-    generated - so this matches on what it has: the employee code first
-    because it is the real identifier, then an exact serial, then the
-    name. Nothing fuzzy: marking the wrong person as gone is worse than
-    finding nobody and saying so.
-    """
-    name, serial, code = name.strip().lower(), serial.strip().lower(), code.strip().lower()
-    if not (name or serial or code):
-        return []
-    rows = register_rows()
-    matched = []
-    for row in rows:
-        if code and row["code"].strip().lower() == code:
-            matched.append(row)
-        elif serial and row["serial"].strip().lower() == serial:
-            matched.append(row)
-        elif name and row["name"].strip().lower() == name:
-            matched.append(row)
-    return matched
 
 
 @app.route("/api/holdings")
@@ -1380,7 +986,7 @@ def leaver():
 @login_required
 def delete_history(record_id):
     record = Handover.query.get_or_404(record_id)
-    file_path = GENERATED_DIR / record.filename
+    file_path = settings.GENERATED_DIR / record.filename
     if file_path.exists():
         file_path.unlink()
     name = record.name
@@ -1402,3 +1008,6 @@ def delete_history(record_id):
 if __name__ == "__main__":
     debug = os.environ.get("FLASK_DEBUG", "1") == "1"
     app.run(debug=debug, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
+
+

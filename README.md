@@ -37,7 +37,7 @@ in a form, and download the completed `.docx`. Supported document types:
 | Hard disk handover               | Issuing an external hard disk to an employee |
 
 Each document type is defined in a single registry
-(`fill_logic.py::TEMPLATES`), which drives the home page, the form for
+(`templates.py::TEMPLATES`), which drives the home page, the form for
 each document type, and the underlying `.docx` template — adding a new
 type does not require changing the Flask routes or HTML pages (see
 [Adding a new document type](#adding-a-new-document-type)).
@@ -110,10 +110,21 @@ it must be set before running.
 ## Project structure
 
 ```
-app.py                  Flask application: routes, authentication, database
-fill_logic.py            Document-filling engine and the TEMPLATES registry
-                         (one fill function per document type, plus the
-                         field list each type's form is generated from)
+settings.py             Every configurable value, read from the environment
+templates.py             What documents exist and what each one asks for.
+                         Data only - no imports, nothing to execute
+ooxml.py                 The Word engine: how to edit a .docx without
+                         disturbing it. Names no document type
+builders.py              One function per SHAPE of document (three of
+                         them serve all ten types)
+models.py                The two tables, and the migration
+documents.py             Form -> validated values -> filled .docx -> row
+employees.py             Who a person is across their documents, and
+                         what they still hold
+asset_register.py        The laptop register spreadsheet
+notify_email.py          The "this has been handed over" message
+leaver_email.py          The two messages sent when someone leaves
+app.py                   Flask application: routes and the web layer only
 doc_templates/            One placeholder Word template per document type:
                              Laptop Handover Template.docx
                              Laptop Replacement Template.docx
@@ -139,7 +150,7 @@ Procfile                  Start command for hosting platforms (gunicorn)
 ### Document generation
 
 Each document type has its own form, generated from its field list in
-`fill_logic.py`. Required fields are validated server-side; mobile
+`templates.py`. Required fields are validated server-side; mobile
 number and National ID fields are additionally checked against a
 regular expression (11-digit Egyptian mobile number, 14-digit national
 ID) before a document is generated, with the specific problem shown
@@ -228,7 +239,7 @@ internal network, review the following:
 1. Obtain a real, filled-in example of the new document.
 2. Sanitize it into a placeholder template (`FILL_*` placeholders
    replacing real values) and add it to `doc_templates/`.
-3. Write a corresponding fill function in `fill_logic.py`.
+3. Write a corresponding fill function in `templates.py`.
 4. Add an entry to the `TEMPLATES` dict describing the document's label,
    template file, fill function, and field list.
 
